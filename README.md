@@ -5,7 +5,7 @@
 
 **A native coding playground with an integrated REA reverse engineering workspace.**
 
-[Download Windows release](https://github.com/xak1234/QuixiDesk-Windows/releases) · [Build from source](#build-from-source) · [REA workflow](#reverse-engineering-with-rea) · [Troubleshooting](#troubleshooting)
+[Download Windows release](https://github.com/xak1234/REAstudio/releases) · [Build from source](#build-from-source) · [REA workflow](#reverse-engineering-with-rea) · [Troubleshooting](#troubleshooting)
 </div>
 
 REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. Its dark playground layout keeps the project on the left, work in the centre, and model/tool settings on the right.
@@ -45,7 +45,7 @@ No global Node, Java, Ghidra, npm, Rust, or administrator installation is needed
 
 ## Install and run
 
-1. Open [Releases](https://github.com/xak1234/QuixiDesk-Windows/releases) and download `REA-Studio-1.1.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
+1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.1.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
 2. Verify the ZIP in PowerShell:
 
    ```powershell
@@ -202,8 +202,8 @@ Do not publish your data directory, API keys, token-bearing URLs, private projec
 Install [Rust via rustup](https://rustup.rs/), [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the MSVC x64 compiler and Windows SDK, and Git. `rust-toolchain.toml` pins Rust 1.98.0. Node is downloaded for the REA bundle; a development Node installation is needed only for the JavaScript validation scripts.
 
 ```powershell
-git clone https://github.com/xak1234/QuixiDesk-Windows.git
-cd QuixiDesk-Windows
+git clone https://github.com/xak1234/REAstudio.git
+cd REAstudio
 cargo build --release --workspace --locked
 .\scripts\prepare-rea-windows.ps1
 .\target\release\REAStudio.exe

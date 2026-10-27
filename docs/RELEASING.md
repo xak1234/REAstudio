@@ -27,7 +27,7 @@ If publishing a locally verified build rather than the workflow artifact, authen
 gh release create v1.1.0 `
   .\dist\REA-Studio-1.1.0-x64.zip `
   .\dist\REA-Studio-1.1.0-x64.zip.sha256 `
-  --repo xak1234/QuixiDesk-Windows `
+  --repo xak1234/REAstudio `
   --verify-tag --draft --title 'REA Studio 1.1.0' `
   --notes-file .\docs\release-notes-1.1.0.md
 ```
