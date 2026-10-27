@@ -2,6 +2,14 @@
 
 The initial Windows edition includes a reconstruction workflow for selected features or staged application rebuilds, saved task handoff, evidence dossier export, and actionable guidance for PE resource ranges that are not file-backed.
 
+## Analysis integrations (V1.1 update)
+
+- Added detected analysis-source selection and green live connection indicators.
+- Integrated optional x64dbg Automate MCP with explicit sessions, bounded observations/controls and durable runtime evidence.
+- Added exported-report imports with source hashes and explicit provenance.
+- Added a separate LLM4Decompile specialist, served-model discovery and a driving-model selector; suggestions remain unverified and source-linked.
+- Extended the app MCP catalog to 24 tools and removed the 25-model discovery truncation.
+
 ## 1.1.0 — 2026-10-27
 
 - Add an opt-in, token-protected local MCP control server with connection config, request activity and immediate listener disable.

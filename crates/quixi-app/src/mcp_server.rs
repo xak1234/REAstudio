@@ -440,7 +440,7 @@ fn handle_http(
             } else {
                 VERSIONS[0]
             };
-            json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"rea-studio","title":"REA Studio","version":env!("CARGO_PKG_VERSION")},"instructions":"Control the currently running REA Studio workspace. Open a project first; use returned project IDs. File writes require the hash from studio_read_file (empty hash for a new file). Commands and Code runs execute as the Windows user. REA tools expose the live static catalog; use returned schemas. Poll studio_run_status after starting tasks. Disabling MCP closes the listener; accepted work can finish."})
+            json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"rea-studio","title":"REA Studio","version":env!("CARGO_PKG_VERSION")},"instructions":"Control the currently running REA Studio workspace. Open a project first; use returned project IDs. File writes require the hash from studio_read_file (empty hash for a new file). Commands and Code runs execute as the Windows user. REA and debugger tools expose live schemas; inspect them before calling. The desktop enables and selects the debugger session and configures the separate decompilation specialist. Imported reports have user-associated target provenance; model suggestions are unverified. Poll studio_run_status after starting tasks. Disabling MCP closes the listener; accepted work can finish."})
         }
         "ping" => json!({}),
         "tools/list" => json!({"tools":tool_catalog()}),
@@ -501,6 +501,13 @@ fn tool_catalog() -> Vec<Value> {
     let string = json!({"type":"string"});
     let boolean = json!({"type":"boolean"});
     vec![
+        tool("studio_analysis_sources","List detected analysis sources and whether they use a live provider or imported reports. File detection is not provider readiness.",json!({}),&[],true),
+        tool("studio_decompile_status","Read the separately configured LLM4Decompile specialist settings and request state. Settings are chosen in the desktop UI.",json!({}),&[],true),
+        tool("studio_decompile_assist","Ask the enabled decompilation specialist to refine one function from a successful original evidence record. Optional input supplies reviewed function text. Saves an unverified suggestion linked to the source; never executes generated code.",json!({"recordId":string,"input":string}),&["recordId"],false),
+        tool("studio_import_analysis","Save an installed tool's exported UTF-8 report against the selected artifact. Preserves source path/hash and labels target association as unverified. Does not execute the file.",json!({"id":string,"path":string}),&["id","path"],false),
+        tool("studio_debugger_status","Inspect x64dbg bridge configuration and connection state. Enable and select the session from the desktop UI.",json!({}),&[],true),
+        tool("studio_debugger_catalog","List the connected x64dbg tools, or return one live input schema. The desktop must enable the bridge first.",json!({"tool":string,"readOnly":boolean}),&[],true),
+        tool("studio_debugger_call","Read or control the user-selected x64dbg session using a live schema. Checks the debuggee executable against the selected artifact and saves runtime evidence. Session selection and enablement stay in the desktop UI.",json!({"tool":string,"arguments":{"type":"object"}}),&["tool","arguments"],false),
         tool("studio_state","List projects, configured model IDs and task summaries (no credentials).",json!({}),&[],true),
         tool("studio_open_project","Open an existing absolute project directory; returns its project ID.",json!({"path":string}),&["path"],false),
         tool("studio_import_code","Push UTF-8 source files into a new REA Studio project for the user. Returns project ID and analysisTarget. Import never executes code. Use studio_rea_select and static REA tools to analyse the returned target, or studio_start_run for coding assistance.",json!({"name":{"type":"string","minLength":1,"maxLength":80},"purpose":{"type":"string","enum":["coding","analysis"]},"analysisPath":{"type":"string","description":"Optional imported file/directory relative to the new project; defaults to its root."},"files":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}}),&["name","files"],false),
@@ -560,6 +567,9 @@ fn dispatch_tool(engine: &Arc<QuixiEngine>, name: &str, args: &Value) -> Result<
             | "studio_rea_select"
             | "studio_rea_call"
             | "studio_export_spec"
+            | "studio_debugger_call"
+            | "studio_import_analysis"
+            | "studio_decompile_assist"
     ) && state()?["runs"]
         .as_array()
         .into_iter()
@@ -569,6 +579,21 @@ fn dispatch_tool(engine: &Arc<QuixiEngine>, name: &str, args: &Value) -> Result<
         bail!("Finish or stop the active model task before changing its workspace or REA session");
     }
     let route = match name {
+        "studio_decompile_status" => "decompile/status",
+        "studio_decompile_assist" => "decompile/assist",
+        "studio_analysis_sources" => "toolchain/sources",
+        "studio_import_analysis" => {
+            if !Path::new(args["path"].as_str().unwrap_or("")).is_absolute() {
+                bail!("Provide an absolute exported report path");
+            }
+            "toolchain/import-report"
+        }
+        "studio_debugger_status" => "debugger/status",
+        "studio_debugger_catalog" => "debugger/catalog",
+        "studio_debugger_call" => {
+            return engine.debugger.call(engine,args["tool"].as_str().context("Tool required")?,
+                args["arguments"].clone(),false);
+        }
         "studio_state" => {
             let mut v = state()?;
             if let Some(runs) = v["runs"].as_array_mut() {

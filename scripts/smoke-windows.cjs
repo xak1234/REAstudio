@@ -4,7 +4,7 @@ const { chromium } = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwr
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
 (async()=>{
-  const browser=await chromium.connectOverCDP('http://127.0.0.1:9322');
+  const browser=await chromium.connectOverCDP(process.env.REA_STUDIO_TEST_CDP || 'http://127.0.0.1:9322');
   const page=browser.contexts()[0].pages().find(p=>p.url().includes('app.localhost/playground'));
   assert(page,'REA Studio playground webview was not found');
   page.setDefaultTimeout(20000);
@@ -84,7 +84,7 @@ const assert = require('node:assert/strict');
   await page.waitForFunction(()=>document.getElementById('rea-output').textContent.includes('procedure_pseudo_code'));
   const recovered=await call('rea/evidence',{id:code.id});assert.deepEqual(recovered,code);
   await page.locator('#toolchain-open').click();
-  await page.waitForFunction(()=>document.querySelectorAll('.toolchain-row').length===20);
+  await page.waitForFunction(()=>document.querySelectorAll('.toolchain-row').length===21);
   await page.locator('#toolchain-dialog summary').filter({hasText:'Bundled REA workflows'}).click();
   await page.locator('#workflow-read').click();
   await page.waitForFunction(()=>document.getElementById('workflow-content').textContent.includes('rea-agents 6.8.0'));

@@ -12,6 +12,10 @@ The listener binds only to `127.0.0.1`. Host and Origin headers are checked, and
 
 | Tool | Purpose |
 | --- | --- |
+| `studio_analysis_sources` | Detected analysis sources, integration type and live connection status. |
+| `studio_import_analysis` | Import an installed tool’s exported text report for the selected artifact. |
+| `studio_debugger_status`, `studio_debugger_catalog`, `studio_debugger_call` | Inspect the optional x64dbg connection, obtain live schemas and use the user-selected session. |
+| `studio_decompile_status`, `studio_decompile_assist` | Read specialist configuration and request a source-linked, unverified LLM4Decompile suggestion. |
 | `studio_state` | Projects, model configuration without keys, and run summaries. |
 | `studio_open_project` | Register an existing absolute project directory. |
 | `studio_import_code` | Receive source files as a new project for code analysis or coding assistance. |
@@ -24,13 +28,13 @@ The listener binds only to `127.0.0.1`. Host and Origin headers are checked, and
 | `studio_export_spec` | Export a reconstruction specification and evidence dossier. |
 | `studio_oracle_run` | Execute declared oracle commands and retain real comparisons. |
 
-The MCP tool catalog includes each operation's input schema. Open a project first and use its returned ID. The REA catalog is discovered from the running provider. Runtime attachment, patching and arbitrary toolchain registration are not exposed in this static tool set. Shell commands and Code tasks still run with the signed-in user's normal permissions.
+The MCP tool catalog includes each operation's input schema. Open a project first and use its returned ID. The REA catalog is discovered from the running provider. The separate x64dbg tools become usable after desktop enablement and session selection. Arbitrary debugger commands, session selection, remote debugger connections, patching and toolchain registration are not exposed by that bridge. Decompilation assistance must be configured and enabled in the desktop; its optional input contains one reviewed function, and recordId must reference successful original evidence for the selected target. Shell commands and Code tasks still run with the signed-in user's normal permissions.
 
 Requests are limited to 3 MiB and four concurrent handlers. Recent tool activity records the tool name, completion status and duration in the settings menu; credentials and tool arguments are not logged there. Tool failures use MCP `isError`; they do not become successful analysis results.
 
 ## Minimal local client check
 
-Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.1.0`, seventeen tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
+Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.1.0`, twenty-four tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
 
 ## Receive code from an agent
 

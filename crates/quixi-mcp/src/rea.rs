@@ -67,14 +67,17 @@ pub const AGENT_TOOLS: &[&str] = &[
     "list_exports",
 ];
 
-struct Client {
+pub(crate) struct Client {
     child: Child,
     input: ChildStdin,
     responses: mpsc::Receiver<Result<Value, String>>,
     stderr: Arc<Mutex<VecDeque<String>>>,
     id: u64,
+    terminate_tree: bool,
 }
 impl Client {
+    pub(crate) fn pid(&self) -> u32 { self.child.id() }
+    pub(crate) fn running(&mut self) -> bool { matches!(self.child.try_wait(), Ok(None)) }
     fn start(root: &Path, mode: &str) -> Result<Self> {
         let node = root.join(if cfg!(windows) {
             "node/node.exe"
@@ -170,7 +173,11 @@ impl Client {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
-        let mut child = command.spawn().context("Could not launch bundled REA")?;
+        Self::spawn(command, true)
+    }
+    pub(crate) fn spawn(mut command: Command, terminate_tree: bool) -> Result<Self> {
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = command.spawn().context("Could not launch MCP provider")?;
         let input = child.stdin.take().context("REA stdin unavailable")?;
         let stdout = child.stdout.take().context("REA stdout unavailable")?;
         let stderr_pipe = child.stderr.take().context("REA stderr unavailable")?;
@@ -227,11 +234,12 @@ impl Client {
             responses,
             stderr,
             id: 0,
+            terminate_tree,
         };
         let initialized = client.request(
             "initialize",
             json!({"protocolVersion":"2025-03-26", "capabilities":{},
-            "clientInfo":{"name":"QuixiDesk REA workspace","version":"1.0.0"}}),
+            "clientInfo":{"name":"REA Studio","version":env!("CARGO_PKG_VERSION")}}),
             Duration::from_secs(45),
         )?;
         if initialized.get("protocolVersion").is_none() {
@@ -246,7 +254,7 @@ impl Client {
         self.input.flush()?;
         Ok(())
     }
-    fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+    pub(crate) fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
         self.id += 1;
         let id = self.id;
         self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
@@ -258,7 +266,7 @@ impl Client {
                 .recv_timeout(remaining)
                 .map_err(|e| {
                     anyhow::anyhow!(
-                "REA connection ended or timed out ({e}). Reconnect to start a new session. {}",
+                "MCP connection ended or timed out ({e}). Reconnect before continuing; the last operation may have completed. {}",
                 self.stderr.lock().iter().cloned().collect::<String>())
                 })?
                 .map_err(anyhow::Error::msg)?;
@@ -277,7 +285,7 @@ impl Client {
                 continue;
             }
             if let Some(error) = message.get("error") {
-                bail!("REA: {error}");
+                bail!("MCP provider: {error}");
             }
             return message
                 .get("result")
@@ -300,7 +308,7 @@ impl Drop for Client {
         }
         // Closing stdin alone can leave a Ghidra JVM alive. Terminate the owned tree.
         #[cfg(windows)]
-        {
+        if self.terminate_tree {
             use std::os::windows::process::CommandExt;
             let _ = Command::new("taskkill.exe")
                 .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
@@ -381,7 +389,7 @@ impl ReaPlugin {
         )
     }
     pub fn status(&self) -> Value {
-        let connected = self.pid.load(Ordering::Acquire) != 0;
+        let connected = self.is_connected();
         json!({"name":"rea", "uuid":"quixi-bundled-rea", "isInternal":false,
             "serverSource":"bundled_plugin", "builtin":true, "transport":"stdio",
             "isConnected":connected,"status":if connected {"connected"} else {"disconnected"},
@@ -389,8 +397,17 @@ impl ReaPlugin {
             "resources":[],"prompts":[]})
     }
     pub fn is_connected(&self) -> bool {
+        // A busy request owns the client lock; never block UI status on analysis.
+        if let Some(mut guard) = self.client.try_lock() {
+            if guard.as_mut().is_some_and(|client| !client.running()) {
+                *guard = None;
+                self.pid.store(0, Ordering::Release);
+                self.catalog.lock().clear();
+            }
+        }
         self.pid.load(Ordering::Acquire) != 0
     }
+    pub fn process_id(&self) -> u32 { self.pid.load(Ordering::Acquire) }
     pub fn new(resources: &Path) -> Self {
         let mode = std::fs::read(preference_path())
             .ok()

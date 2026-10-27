@@ -6,6 +6,7 @@ use quixi_platform::ComputerUse;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -15,6 +16,7 @@ use uuid::Uuid;
 pub struct AnalysisWorkspace {
     dir: PathBuf,
     pub target: Mutex<String>,
+    pub provider_sessions: Mutex<HashMap<String,u32>>,
 }
 
 #[cfg(test)]
@@ -74,6 +76,7 @@ impl AnalysisWorkspace {
         Self {
             dir,
             target: Mutex::new(target),
+            provider_sessions: Mutex::new(HashMap::new()),
         }
     }
     pub fn inventory(&self) -> Value {
@@ -85,7 +88,7 @@ impl AnalysisWorkspace {
                 }
                 if let Ok(bytes) = fs::read(entry.path()) {
                     if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
-                        records.push(json!({"id":v["id"],"tool":v["tool"],"created":v["created"],"target":v["target"],"failed":v["failed"]}));
+                        records.push(json!({"id":v["id"],"tool":v["tool"],"provider":v["provider"],"kind":v["kind"],"created":v["created"],"target":v["target"],"failed":v["failed"]}));
                     }
                 }
             }
@@ -97,6 +100,21 @@ impl AnalysisWorkspace {
     fn record_path(&self, id: &str) -> Result<PathBuf> {
         let id = Uuid::parse_str(id).context("Invalid evidence record ID")?;
         Ok(self.dir.join(format!("{id}.json")))
+    }
+    pub fn read_record(&self, id: &str) -> Result<Value> {
+        Ok(serde_json::from_slice(&fs::read(self.record_path(id)?)?)?)
+    }
+    #[allow(clippy::too_many_arguments)] // Explicit provenance fields at each observation boundary.
+    pub fn save_external(&self, provider: &str, kind: &str, tool: &str, arguments: Value,
+        target: &str, response: Value, provenance: Value) -> Result<Value> {
+        let id = Uuid::new_v4().to_string();
+        let record = json!({"id":id,"provider":provider,"kind":kind,"tool":tool,
+            "arguments":arguments,"target":target,"selectedTarget":*self.target.lock(),
+            "created":chrono::Utc::now().to_rfc3339(),"failed":response["isError"]==true,
+            "response":response,"provenance":provenance});
+        fs::write(self.record_path(&id)?, serde_json::to_vec_pretty(&record)?)
+            .context("Could not save the analysis observation")?;
+        Ok(record)
     }
     pub fn export_dossier(
         &self,
@@ -157,7 +175,7 @@ impl AnalysisWorkspace {
             let id = item["id"].as_str().unwrap();
             let file = format!("evidence/{id}.json");
             fs::write(destination.join(&file), bytes)?;
-            manifest.push(json!({"id":id,"file":file,"tool":item["tool"],"failed":item["failed"],"created":item["created"],"sha256":format!("{:x}",Sha256::digest(bytes))}));
+            manifest.push(json!({"id":id,"file":file,"tool":item["tool"],"provider":item["provider"],"kind":item["kind"],"failed":item["failed"],"created":item["created"],"sha256":format!("{:x}",Sha256::digest(bytes))}));
         }
         let has_brief = brief.is_some();
         let brief_text = brief.as_ref().and_then(|b| b["reply"].as_str()).unwrap_or("No completed analysis brief was selected. Prepare an analysis task and save another dossier after reviewing its result.");
@@ -195,13 +213,24 @@ impl AnalysisWorkspace {
             }
         };
         let evidence = quixi_mcp::rea::payload(&response);
+        if !failed {
+            if tool=="close_binary" { engine.analysis.provider_sessions.lock().clear(); }
+            if tool=="open_binary" {
+                if let Some(provider)=args["provider_id"].as_str().filter(|p|matches!(*p,"ghidra"|"ida")) {
+                    let mut sessions=engine.analysis.provider_sessions.lock();
+                    sessions.remove("ghidra");sessions.remove("ida");
+                    sessions.insert(provider.into(),engine.rea.process_id());
+                }
+            }
+            if tool=="inspect_android_package" { engine.analysis.provider_sessions.lock().insert("jadx-mcp".into(),engine.rea.process_id()); }
+        }
         let target = args["path"]
             .as_str()
             .or_else(|| args["input_path"].as_str())
             .or_else(|| evidence.pointer("/target/path").and_then(Value::as_str))
             .or_else(|| evidence.pointer("/result/path").and_then(Value::as_str))
             .unwrap_or(&selected_target);
-        let record = json!({"selectedTarget":selected_target,"id":id,"tool":tool,"arguments":args,"target":target,
+        let record = json!({"provider":"rea","kind":"static","selectedTarget":selected_target,"id":id,"tool":tool,"arguments":args,"target":target,
             "created":chrono::Utc::now().to_rfc3339(),"failed":failed,"response":response});
         fs::write(
             engine.analysis.record_path(&id)?,

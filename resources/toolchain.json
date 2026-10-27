@@ -149,7 +149,7 @@
         "x96dbg.exe",
         "x64dbg.exe"
       ],
-      "note": "Open the debugger, then choose x32 or x64 and a target explicitly.",
+      "note": "Live analysis through the optional x64dbg Automate MCP bridge. Enable it and select a session in Reverse engineering; selecting this source never starts a target.",
       "download": {
         "version": "2026.05.27",
         "file": "snapshot_2026-05-27_12-11.zip",
@@ -157,6 +157,17 @@
         "sha256": "d41966dfc5b435a372798245300ca0ab7bb8e48bdbf48512c6fb20fcca427697",
         "bytes": 31526833
       }
+    },
+    {
+      "id": "x64dbg-bridge",
+      "name": "x64dbg Automate MCP",
+      "group": "Binary & low-level",
+      "source": "https://dariushoule.github.io/x64dbg-automate-pyclient/mcp-server/",
+      "kind": "config",
+      "candidates": [
+        "x64dbg-automate-mcp.exe"
+      ],
+      "note": "Install the Automate plugin and Python MCP client with Install-X64dbg-Bridge.ps1, or choose an existing x64dbg-automate-mcp.exe. Starts disabled each app launch."
     },
     {
       "id": "imhex",

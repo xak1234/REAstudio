@@ -1008,6 +1008,45 @@ impl ProviderManager {
         Self::resolve_key_with(entry, supplied, base_url, |name| std::env::var(name).ok())
     }
 
+    // Separate, explicit provider routing; this never changes the driving agent's model.
+    pub fn specialist_request(&self, provider: &str, body: Option<Value>) -> anyhow::Result<Value> {
+        use anyhow::{bail, Context};
+        use std::io::Read;
+        let entry = self.state.read().providers.iter().find(|p|p.id==provider).cloned()
+            .context("Choose a configured specialist provider")?;
+        if entry.api_format != "openai" || entry.auth_mode == "oauth" {
+            bail!("LLM4Decompile requires an OpenAI-compatible text-completion endpoint with API key or local authentication");
+        }
+        let base = entry.base_url.trim_end_matches('/');
+        let url = url::Url::parse(base)?;
+        if !matches!(url.scheme(),"http"|"https") || !url.username().is_empty() || url.password().is_some() || url.query().is_some() {
+            bail!("Use an HTTP(S) API base URL without credentials or query parameters");
+        }
+        let key = Self::resolve_key(&entry,"",base).0;
+        let generating = body.is_some();
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(if generating { 180 } else { 10 }))
+            .redirect(reqwest::redirect::Policy::none()).build()?;
+        let mut request = if let Some(body) = body {
+            client.post(format!("{base}/completions")).json(&body)
+        } else { client.get(format!("{base}/models")) };
+        if !key.is_empty() { request = request.bearer_auth(&key); }
+        let response = request.send().context("Specialist endpoint request failed")?;
+        let status = response.status();
+        let mut bytes = vec![];
+        response.take(2 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        if bytes.len() > 2 * 1024 * 1024 { bail!("Specialist response exceeds 2 MiB"); }
+        if !status.is_success() {
+            let text = String::from_utf8_lossy(&bytes);
+            let text = if key.is_empty() { text.into_owned() } else { text.replace(&key,"[redacted]") };
+            bail!("Specialist endpoint HTTP {}: {}",status.as_u16(),text.chars().take(1000).collect::<String>());
+        }
+        let result: Value = serde_json::from_slice(&bytes).context("Specialist endpoint did not return JSON")?;
+        if !result["error"].is_null() { bail!("Specialist endpoint returned an error"); }
+        Ok(result)
+    }
+
     pub fn get_public_state(&self) -> Value {
         let st = self.state.read();
         let configured_count = st.providers.iter().filter(|p| p.configured).count();
@@ -1274,7 +1313,7 @@ impl ProviderManager {
                         let status = resp.status();
                         if let Ok(json_body) = resp.json::<Value>() {
                             if let Some(arr) = json_body.get("data").and_then(|v| v.as_array()) {
-                                for item in arr.iter().take(25) {
+                                for item in arr.iter().take(2000) {
                                     if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
                                         discovered_models.push(id.to_string());
                                     }
@@ -1327,6 +1366,20 @@ impl ProviderManager {
             "message": message,
             "discoveredModels": discovered_models,
         })
+    }
+
+    /// Add advertised choices without changing either selected model or credentials.
+    pub fn remember_models(&self, provider: &str, models: &[&str]) {
+        let mut st = self.state.write();
+        if let Some(entry) = st.providers.iter_mut().find(|p| p.id == provider) {
+            for id in models.iter().filter(|id| !id.is_empty()).take(2000) {
+                if !entry.models.iter().any(|m| m.id == *id) {
+                    entry.models.push(Self::model(id, id, entry.context_window, false, false));
+                }
+            }
+        }
+        drop(st);
+        self.persist();
     }
 
     pub fn detect_local_servers(&self) -> Value {

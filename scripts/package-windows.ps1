@@ -44,6 +44,7 @@ try {
     Copy-Item -LiteralPath docs -Destination $output -Recurse
     Copy-Item -LiteralPath scripts\install-windows.ps1 -Destination (Join-Path $output 'Install-REA-Studio.ps1')
     Copy-Item -LiteralPath scripts\install-toolchain.ps1 -Destination (Join-Path $output 'Install-Toolchain.ps1')
+    Copy-Item -LiteralPath scripts\install-x64dbg-bridge.ps1 -Destination (Join-Path $output 'Install-X64dbg-Bridge.ps1')
     $source = Join-Path $output 'third-party-source'
     New-Item $source -ItemType Directory -Force | Out-Null
     Move-Item (Join-Path $resources 'plugins\rea\sources\*') $source

@@ -1,5 +1,7 @@
 pub mod playground;
 pub mod analysis;
+pub mod debugger;
+pub mod decompile;
 pub mod reconstruction;
 pub mod toolchain;
 pub mod providers;
@@ -51,6 +53,8 @@ pub struct QuixiEngine {
     pub playground: playground::Playground,
     pub rea: Arc<quixi_mcp::rea::ReaPlugin>,
     pub analysis: analysis::AnalysisWorkspace,
+    pub debugger: debugger::DebuggerWorkspace,
+    pub decompile: decompile::DecompileAssistant,
     pub provider_manager: ProviderManager,
     pub user_locale: RwLock<String>,
     pub emitter: RwLock<Option<EventCallback>>,
@@ -166,6 +170,8 @@ impl QuixiEngine {
         let engine = Arc::new(Self {
             resources_dir: resources_dir.clone(),
             analysis: analysis::AnalysisWorkspace::new(&data_dir),
+            debugger: debugger::DebuggerWorkspace::default(),
+            decompile: decompile::DecompileAssistant::new(&data_dir),
             playground: playground::Playground::new(&data_dir),
             rea: rea.clone(),
             data_dir,
@@ -1149,11 +1155,13 @@ impl QuixiEngine {
         }
         if clean_path == "/api/quixi/providers/save" {
             let res = self.provider_manager.save_provider(&body_json);
+            self.decompile.provider_changed(body_json["providerId"].as_str().unwrap_or("openrouter"));
             self.sync_sessions_to_connected_models();
             return Self::json_resp(200, &res);
         }
         if clean_path == "/api/quixi/providers/remove" {
             let res = self.provider_manager.remove_provider(&body_json);
+            self.decompile.provider_changed(body_json["providerId"].as_str().unwrap_or("openrouter"));
             self.sync_sessions_to_connected_models();
             return Self::json_resp(200, &res);
         }

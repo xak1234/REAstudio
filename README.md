@@ -27,10 +27,12 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 | Code mode | Read/write files and run commands as the signed-in Windows user. |
 | REA plugin | Persistent MCP connection, live tool schemas and availability, artifact selection, recovered code, and saved JSON evidence. |
 | Reconstruction | Binary → REA → SPEC.md → rebuild → oracle → retry, with separate implementation runs and persisted evidence/comparison reports. |
-| Toolchain | Detection, configured paths, workflow guides, GUI launch and ten pinned optional portable downloads. |
+| Analysis sources | Installed-tool selector, green live connection indicators, REA providers, x64dbg observations, and imported reports. |
+| Decompilation assistant | Separate LLM4Decompile endpoint and driving agent model; source-linked suggestions with verification status. |
+| Toolchain | Detection, configured paths, workflow guides, GUI launch, optional portable downloads and x64dbg bridge setup. |
 | Providers | API-key providers and local/custom OpenAI-compatible endpoints; model selection and connection testing. |
 
-This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY, a debugger UI, Git staging/commit buttons, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
+This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY, a full debugger UI, Git staging/commit buttons, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
 
 ## Requirements
 
@@ -135,7 +137,7 @@ The plugin receives its own `JAVA_HOME`, `GHIDRA_INSTALL_DIR`, and `PATH`. It do
 3. Use a quick action such as **Open native target**, **Imports**, **PE resources**, **.NET metadata**, or **JavaScript / Electron**. Review the real advertised JSON input schema and arguments, then click **Run analysis**. **Open native target** starts Ghidra in the background; it does not open a separate Ghidra desktop window.
 4. For native work, open the binary and click **Functions**, then **Run analysis**. A paged table shows actual retained functions; click **Decompile** beside a local function to retrieve its code. External imports are labelled separately. **Strings** provides a search field and rejects empty input before calling REA. Guided fields and the advanced JSON editor stay in sync; refreshing the catalog preserves your arguments. A successful `open_binary` call alone does not prove that deeper native analysis succeeded.
 5. Read **Evidence & recovered code**, including limitations. **Complete result** contains the entire retained MCP response. For large live views, use `inspect_analysis_view` with the returned reference to retrieve additional pages.
-6. Use **Use in task** to supply a saved analysis record to the coding agent. **Enable analysis tools for this task** grants the agent the implemented static-analysis subset.
+6. Use **Use in task** to supply a saved analysis record to the coding agent. **Enable analysis tools for this task** grants the agent the static-analysis subset, saved records, and the separately enabled debugger/specialist integrations. Ask mode reads debugger observations; Code mode also permits its bounded execution controls.
 7. **Export JSON** writes a saved result to a selected folder. **Close target** releases the current live target.
 
 The interactive catalog comes from the running REA version, not a fabricated tool list. It can show tools unavailable on your operating system or without optional engines. Commercial tools, Frida, Linux runtimes, and mobile toolchains are **not** included or automatically licensed. The coding agent's subset excludes runtime attachment, target execution, extraction, and patching operations; the manual catalog may expose additional tools when REA advertises them.
@@ -240,6 +242,16 @@ cargo test --release -p quixi-app mcp_server::tests --locked
 Clippy warnings inherited from shared upstream modules may remain; a successful check is not a claim that all upstream warnings were removed. The entire legacy test suite is not used as a Windows compatibility claim.
 
 For a real WebView2/Ghidra end-to-end check, follow [docs/TESTING.md](docs/TESTING.md). It uses an isolated profile and a compiled native fixture; it does not mock MCP or pretend to run a model. Live model tests require a separately configured provider and are not run by public CI with anyone's credentials.
+
+## Additional analysis sources and specialist models
+
+**Reverse engineering → Analysis source** lists detected tools. REA, Ghidra, configured IDA and the JADX MCP provider use their live REA tools. x64dbg uses its optional Automate bridge. Other detected tools contribute exported UTF-8 reports, logs, JSON or decompiled source through **Import exported results**. Detection is bounded to configured paths, portable folders and PATH; use **Toolchain → Choose path** for another installation. Installed files alone do not produce a green Connected indicator.
+
+For x64dbg, choose **Prepare bridge setup** and run the prepared command in a project terminal. Python 3.10+ is required. The installer keeps its Python environment and plugins app-local. Enable the connection, then explicitly start the selected EXE/DLL or connect an existing debugger PID. Read registers/memory/disassembly and control breakpoints/stepping through the live schema. Disabling leaves the debugger open. See [toolchain details](docs/TOOLCHAIN.md).
+
+Open **Decompilation assistant · LLM4Decompile**, choose a specialist provider and **Discover models**. Select the served model, its Ref V2 or End V1.5 input profile, and enable specialist requests. Select a different **Driving agent model** to coordinate the investigation. **Prepare task for driving model** prepares an Ask task; **Request specialist suggestion** calls the specialist directly. The specialist uses raw `/completions` prompts and leaves the main provider/model selection unchanged. It does not download models. Ref expects Ghidra pseudo-code; End expects prepared assembly. Generated suggestions keep the source record, input hash, model, completion status and unverified label. Compile and test them separately. Windows compatibility is not established by LLM4Decompile's Linux x86-64/GCC benchmarks.
+
+Green **Connected** labels reflect active MCP connections, opened REA providers, or the specialist's last successful completion. They are connection state, not proof of complete analysis or correct generated code. Recheck after changing or restarting an external tool.
 
 ## GitHub deployment
 

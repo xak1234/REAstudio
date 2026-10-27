@@ -1,4 +1,5 @@
 pub mod rea;
+pub mod debugger;
 use anyhow::Result;
 use quixi_platform::{BrowserUse, ComputerUse};
 use serde::{Deserialize, Serialize};

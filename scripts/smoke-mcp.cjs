@@ -15,8 +15,9 @@ async function mcpPort(){for(let i=0;i<20;i++){const probe=net.createServer();tr
 (async()=>{
   const root=process.env.QUIXI_SMOKE_ROOT, profile=process.env.REA_STUDIO_TEST_DATA;
   const key=process.env.REA_STUDIO_TEST_EXPECTED_ENV_KEY;
+  const unsaved=`Unsaved work survives an incoming MCP project: ${Date.now()}.\n`;
   assert(root && profile && key,'Use an isolated fixture root/profile and a non-secret environment test value');
-  const browser=await chromium.connectOverCDP('http://127.0.0.1:9322');
+  const browser=await chromium.connectOverCDP(process.env.REA_STUDIO_TEST_CDP || 'http://127.0.0.1:9322');
   const page=browser.contexts()[0].pages().find(p=>p.url().includes('app.localhost/playground'));assert(page);
   page.setDefaultTimeout(15000);page.setDefaultNavigationTimeout(15000);const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const native=(route,data={})=>page.evaluate(async({route,data})=>{const r=await fetch('/api/quixi/'+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const v=await r.json();if(!r.ok)throw Error(v.error || String(r.status));return v;},{route,data});
@@ -39,7 +40,7 @@ async function mcpPort(){for(let i=0;i<20;i++){const probe=net.createServer();tr
     client=new Client({name:'rea-studio-integration-check',version:'1.1.0'});
     await client.connect(new StreamableHTTPClientTransport(new URL(config.url),{requestInit:{headers:config.headers}}));
     assert.equal(client.getServerVersion().name,'rea-studio');assert.equal(client.getServerVersion().version,'1.1.0');
-    const catalog=await client.listTools();assert.equal(catalog.tools.length,17);
+    const catalog=await client.listTools();assert.equal(catalog.tools.length,24);
     const call=async(name,args={})=>{const r=await client.callTool({name,arguments:args});assert.equal(r.isError,false,JSON.stringify(r));return r.structuredContent || JSON.parse(r.content[0].text);};
     console.log('MCP check: official client connected');const state=await call('studio_state');assert(!JSON.stringify(state).includes(config.headers.Authorization));assert(!JSON.stringify(state).includes(key));
     const project=await call('studio_open_project',{path:root});
@@ -53,7 +54,7 @@ async function mcpPort(){for(let i=0;i<20;i++){const probe=net.createServer();tr
     const rea=await call('studio_rea_catalog',{tool:'search_strings'});assert.equal(rea.name,'search_strings');assert(rea.inputSchema.required.includes('pattern'));
     await page.locator('#mcp-close').click();await page.waitForFunction(()=>document.getElementById('mcp-config-output').textContent==='');
     await page.locator('#project').selectOption(project.id);await page.locator('.file-row[title="README.md"]').click();
-    await page.locator('#editor').fill('Unsaved work survives an incoming MCP project.\n');
+    await page.locator('#editor').fill(unsaved);
     const source='export function sum(a, b) { return a + b; }\n';
     const coding=await call('studio_import_code',{name:'Agent coding fixture',purpose:'coding',files:[{path:'src/main.js',content:source},{path:'README.md',content:'Received for coding assistance.\n'}]});
     const analysis=await call('studio_import_code',{name:'Agent analysis fixture',purpose:'analysis',files:[{path:'package.json',content:JSON.stringify({name:'rea-import-fixture',version:'1.0.0',type:'module'})},{path:'src/main.js',content:source}]});
@@ -62,9 +63,9 @@ async function mcpPort(){for(let i=0;i<20;i++){const probe=net.createServer();tr
     const importedRead=await call('studio_read_file',{project:coding.project.id,path:'src/main.js'});assert.equal(importedRead.content,source);
     const badImport=await client.callTool({name:'studio_import_code',arguments:{name:'Bad path',files:[{path:'../escape.js',content:'bad'}]}});assert.equal(badImport.isError,true);
     await page.locator('#received-code-note').filter({hasText:'Agent analysis fixture'}).waitFor();
-    assert.equal(await page.locator('#project').inputValue(),project.id);assert.equal(await page.locator('#editor').inputValue(),'Unsaved work survives an incoming MCP project.\n');
+    assert.equal(await page.locator('#project').inputValue(),project.id);assert.equal(await page.locator('#editor').inputValue(),unsaved);
     page.once('dialog',d=>d.dismiss());await page.locator('#received-code-open').click();
-    assert.equal(await page.locator('#project').inputValue(),project.id);assert.equal(await page.locator('#editor').inputValue(),'Unsaved work survives an incoming MCP project.\n');
+    assert.equal(await page.locator('#project').inputValue(),project.id);assert.equal(await page.locator('#editor').inputValue(),unsaved);
     await page.locator('#save').click();await page.waitForFunction(()=>document.getElementById('dirty').hidden);
     await page.locator('#received-code-open').click();await page.waitForFunction(()=>document.getElementById('artifact-name').textContent.startsWith('received-code-'));
     assert.equal(await page.locator('#project').inputValue(),analysis.project.id);
