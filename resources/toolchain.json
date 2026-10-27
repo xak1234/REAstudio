@@ -1,0 +1,282 @@
+{
+  "formatVersion": 1,
+  "tools": [
+    {
+      "id": "rea",
+      "name": "REA",
+      "group": "Analysis core",
+      "source": "https://github.com/morluto/rea",
+      "kind": "bundled",
+      "candidates": [],
+      "note": "Bundled persistent MCP; use Connect REA and its live tool catalog."
+    },
+    {
+      "id": "ghidra",
+      "name": "Ghidra",
+      "group": "Analysis core",
+      "source": "https://github.com/NationalSecurityAgency/ghidra",
+      "kind": "gui",
+      "candidates": [],
+      "note": "Bundled native provider; Open native target uses its headless bridge."
+    },
+    {
+      "id": "ghidramcp",
+      "name": "GhidraMCP",
+      "group": "Analysis core",
+      "source": "https://github.com/LaurieWired/GhidraMCP",
+      "kind": "reference",
+      "candidates": [],
+      "note": "Optional GUI extension and separate MCP server. REA already supplies its own Ghidra bridge; this extension is not required by REA."
+    },
+    {
+      "id": "ida",
+      "name": "IDA Pro MCP registration",
+      "group": "Analysis core",
+      "source": "https://github.com/mrexodia/ida-pro-mcp",
+      "kind": "config",
+      "candidates": [],
+      "note": "Choose an existing REA-compatible IDA MCP JSON registration. Requires your licensed IDA installation; REA supports attached and headless profiles."
+    },
+    {
+      "id": "jadx",
+      "name": "JADX",
+      "group": "Mobile & apps",
+      "source": "https://github.com/skylot/jadx",
+      "kind": "cli",
+      "candidates": [
+        "jadx.bat"
+      ],
+      "note": "Portable CLI/GUI. REA Android analysis separately needs its supported headless JADX MCP JAR.",
+      "download": {
+        "version": "v1.5.6",
+        "file": "jadx-1.5.6.zip",
+        "url": "https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip",
+        "sha256": "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974",
+        "bytes": 72646741
+      }
+    },
+    {
+      "id": "jadx-mcp",
+      "name": "JADX MCP JAR",
+      "group": "Mobile & apps",
+      "source": "https://github.com/1013503897/jadx-headless-mcp",
+      "kind": "config",
+      "candidates": [
+        "jadx-headless-mcp-0.7.1-all.jar"
+      ],
+      "note": "Pinned headless JADX MCP engine required by bundled REA. The portable installation is discovered when REA starts; use Choose path for another location.",
+      "download": {
+        "version": "v0.7.1",
+        "file": "jadx-headless-mcp-0.7.1-all.jar",
+        "url": "https://github.com/1013503897/jadx-headless-mcp/releases/download/v0.7.1/jadx-headless-mcp-0.7.1-all.jar",
+        "sha256": "6e5eacf500b64292bfb73c49797c1958f6ee44646e43e868039ae7feb573ff75",
+        "bytes": 42619858
+      }
+    },
+    {
+      "id": "apktool",
+      "name": "Apktool",
+      "group": "Mobile & apps",
+      "source": "https://github.com/iBotPeaches/Apktool",
+      "kind": "jar",
+      "candidates": [
+        "apktool_3.0.3.jar"
+      ],
+      "note": "Uses the bundled JDK. Decode/build explicitly into a separate destination.",
+      "download": {
+        "version": "v3.0.3",
+        "file": "apktool_3.0.3.jar",
+        "url": "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar",
+        "sha256": "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423",
+        "bytes": 15478013
+      }
+    },
+    {
+      "id": "frida",
+      "name": "Frida",
+      "group": "Mobile & apps",
+      "source": "https://github.com/frida/frida",
+      "kind": "cli",
+      "candidates": [
+        "frida.exe"
+      ],
+      "note": "Install frida-tools in your own Python environment. Runtime instrumentation needs an explicitly selected process/device; installation alone does not attach to one."
+    },
+    {
+      "id": "ilspy",
+      "name": "ILSpy",
+      "group": "Mobile & apps",
+      "source": "https://github.com/icsharpcode/ILSpy",
+      "kind": "gui",
+      "candidates": [
+        "ILSpy.exe"
+      ],
+      "note": "Self-contained Windows .NET decompiler. ILSpyCmd is a separate optional CLI.",
+      "download": {
+        "version": "v11.2",
+        "file": "ILSpy_windows_selfcontained_11.2.0.10050-x64.zip",
+        "url": "https://github.com/icsharpcode/ILSpy/releases/download/v11.2/ILSpy_windows_selfcontained_11.2.0.10050-x64.zip",
+        "sha256": "c30cda0e5a22435df5013eeffa515594abf144e2d06c9bb5ddcc9fccdefd69c8",
+        "bytes": 55088438
+      }
+    },
+    {
+      "id": "radare2",
+      "name": "radare2",
+      "group": "Binary & low-level",
+      "source": "https://github.com/radareorg/radare2",
+      "kind": "cli",
+      "candidates": [
+        "radare2.exe",
+        "r2.exe"
+      ],
+      "note": "Standalone disassembly and analysis CLI; not a REA deep provider.",
+      "download": {
+        "version": "6.2.4",
+        "file": "radare2-6.2.4-w64.zip",
+        "url": "https://github.com/radareorg/radare2/releases/download/6.2.4/radare2-6.2.4-w64.zip",
+        "sha256": "aa3454fd89e8a4ead450caff35a1d3919065744e7091540d4913a9487241799d",
+        "bytes": 13637072
+      }
+    },
+    {
+      "id": "x64dbg",
+      "name": "x64dbg",
+      "group": "Binary & low-level",
+      "source": "https://github.com/x64dbg/x64dbg",
+      "kind": "gui",
+      "candidates": [
+        "x96dbg.exe",
+        "x64dbg.exe"
+      ],
+      "note": "Open the debugger, then choose x32 or x64 and a target explicitly.",
+      "download": {
+        "version": "2026.05.27",
+        "file": "snapshot_2026-05-27_12-11.zip",
+        "url": "https://github.com/x64dbg/x64dbg/releases/download/2026.05.27/snapshot_2026-05-27_12-11.zip",
+        "sha256": "d41966dfc5b435a372798245300ca0ab7bb8e48bdbf48512c6fb20fcca427697",
+        "bytes": 31526833
+      }
+    },
+    {
+      "id": "imhex",
+      "name": "ImHex",
+      "group": "Binary & low-level",
+      "source": "https://github.com/WerWolv/ImHex",
+      "kind": "gui",
+      "candidates": [
+        "imhex.exe"
+      ],
+      "note": "Standalone hex/pattern inspection.",
+      "download": {
+        "version": "v1.38.1",
+        "file": "imhex-1.38.1-Windows-Portable-x86_64.zip",
+        "url": "https://github.com/WerWolv/ImHex/releases/download/v1.38.1/imhex-1.38.1-Windows-Portable-x86_64.zip",
+        "sha256": "32520e57712894bc8304c4b01553223e7dda25852326184f99dfd72a09a80187",
+        "bytes": 66578670
+      }
+    },
+    {
+      "id": "angr",
+      "name": "angr Python environment",
+      "group": "Binary & low-level",
+      "source": "https://github.com/angr/angr",
+      "kind": "python",
+      "candidates": [],
+      "note": "Choose an interpreter from an environment containing angr. Use a compatible Python environment; this is not bundled or claimed validated on every Windows/Python combination."
+    },
+    {
+      "id": "mitmproxy",
+      "name": "mitmproxy / mitmweb",
+      "group": "Network & runtime",
+      "source": "https://github.com/mitmproxy/mitmproxy",
+      "kind": "cli",
+      "candidates": [
+        "mitmweb.exe",
+        "mitmdump.exe"
+      ],
+      "note": "Windows uses mitmweb/mitmdump. Configure capture scope explicitly. No proxy settings or certificates are installed by QuixiDesk."
+    },
+    {
+      "id": "dnspy",
+      "name": "dnSpyEx",
+      "group": "Network & runtime",
+      "source": "https://github.com/dnSpyEx/dnSpy",
+      "kind": "gui",
+      "candidates": [
+        "dnSpy.exe"
+      ],
+      "note": "Standalone .NET debugger/editor. Open a target explicitly.",
+      "download": {
+        "version": "v6.6.0",
+        "file": "dnSpy-net-win64.zip",
+        "url": "https://github.com/dnSpyEx/dnSpy/releases/download/v6.6.0/dnSpy-net-win64.zip",
+        "sha256": "8ed48f165dc355e869f3a0037ad4f9216147f995a5ae0258b296eeef1f73aab0",
+        "bytes": 99558585
+      }
+    },
+    {
+      "id": "rizin",
+      "name": "Rizin",
+      "group": "Network & runtime",
+      "source": "https://github.com/rizinorg/rizin",
+      "kind": "cli",
+      "candidates": [
+        "rizin.exe"
+      ],
+      "note": "Standalone binary analysis CLI; not a REA deep provider.",
+      "download": {
+        "version": "v0.9.1",
+        "file": "rizin-windows-shared64-v0.9.1.zip",
+        "url": "https://github.com/rizinorg/rizin/releases/download/v0.9.1/rizin-windows-shared64-v0.9.1.zip",
+        "sha256": "45ffa004e26653eaee8d262b8e6eeae09402a7d319c1f20a2ba794bd6af1cc28",
+        "bytes": 11731171
+      }
+    },
+    {
+      "id": "raddebugger",
+      "name": "RAD Debugger",
+      "group": "Network & runtime",
+      "source": "https://github.com/EpicGames/raddebugger",
+      "kind": "gui",
+      "candidates": [
+        "raddbg.exe"
+      ],
+      "note": "Optional alpha debugger for local x64 targets.",
+      "download": {
+        "version": "v0.9.29-alpha",
+        "file": "raddbg.zip",
+        "url": "https://github.com/EpicGames/raddebugger/releases/download/v0.9.29-alpha/raddbg.zip",
+        "sha256": "4cedc9f70599475e5e6559d0387b619f27baeff9ed31cab81adecbee188e5316",
+        "bytes": 9641125
+      }
+    },
+    {
+      "id": "workflows",
+      "name": "REA workflows",
+      "group": "Rebuild & verify",
+      "source": "https://github.com/morluto/rea",
+      "kind": "workflow",
+      "candidates": [],
+      "note": "The pinned REA package includes its matching workflow instructions and references."
+    },
+    {
+      "id": "awesome-ai",
+      "name": "AI reverse engineering catalog",
+      "group": "Rebuild & verify",
+      "source": "https://github.com/zhuyansen/awesome-ai-reverse-engineering",
+      "kind": "reference",
+      "candidates": [],
+      "note": "Reference catalog, not an executable or a guarantee of security or compatibility."
+    },
+    {
+      "id": "awesome-re",
+      "name": "Reverse engineering catalog",
+      "group": "Rebuild & verify",
+      "source": "https://github.com/morluto/awesome-reverse-engineering",
+      "kind": "reference",
+      "candidates": [],
+      "note": "Reference catalog for choosing additional analysis tools."
+    }
+  ]
+}

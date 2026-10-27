@@ -1,0 +1,14 @@
+{
+  "id": "rea",
+  "name": "Reverse Engineer Anything",
+  "version": "6.8.0",
+  "transport": "stdio",
+  "command": "node/node.exe",
+  "args": ["node_modules/rea-agents/scripts/rea.mjs", "mcp"],
+  "runtime": { "node": "24.22.1", "ghidra": "12.1.4", "jdk": "21.0.12.1+1" },
+  "environment": { "GHIDRA_INSTALL_DIR": "ghidra", "JAVA_HOME": "jdk" },
+  "windowsNativeAnalysis": "experimental P0: supported PE files on local NTFS",
+  "source": "https://github.com/morluto/rea",
+  "license": "MIT",
+  "optionalInstalledLauncher": "%USERPROFILE%/.local/bin/rea.cmd"
+}

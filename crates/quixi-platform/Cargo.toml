@@ -1,0 +1,22 @@
+[package]
+name = "quixi-platform"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+base64.workspace = true
+tracing.workspace = true
+dirs.workspace = true
+open = "5.3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+rfd = "0.15.4"
+arboard = { version = "3.6.1", default-features = false }
+enigo = "0.3.0"
+screenshots = "0.8.10"
+image = { version = "0.24.9", default-features = false, features = ["png"] }
