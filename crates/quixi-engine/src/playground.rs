@@ -247,6 +247,7 @@ impl Playground {
                         .filter(|r| {
                             r.project == project.id
                                 && r.status == "completed"
+                                && !r.reply.trim().is_empty()
                                 && r.mode == "ask"
                                 && r.rea_enabled
                                 && r.prompt.starts_with("[Reconstruction brief]\n")
@@ -433,7 +434,7 @@ fn execute(engine: &Arc<QuixiEngine>, project: &Project, run: &Run) -> Result<()
         let response = engine.provider_manager.try_live_coding_completion_streaming(&prompt, &project.path,
             &history, Some(&run.model), |delta| {
                 if let Some(r) = pg.runs.lock().get_mut(&run.id) { r.reply.push_str(delta); }
-            }).ok_or_else(|| anyhow::anyhow!("The provider returned no response. Check its address, credentials, model and connection."))?;
+            }).filter(|response| !response.0.trim().is_empty()).ok_or_else(|| anyhow::anyhow!("The provider returned no usable answer. Check its API base URL, credentials, selected model and connection; no successful task result was produced."))?;
         if pg.stopping(&run.id) {
             pg.update(&run.id, |r| r.status = "cancelled".into());
             return Ok(());
@@ -475,6 +476,9 @@ fn execute(engine: &Arc<QuixiEngine>, project: &Project, run: &Run) -> Result<()
         let name = field(&action, "action")?;
         if name == "done" {
             let summary = field(&action, "summary")?;
+            if summary.trim().is_empty() {
+                bail!("The model returned an empty final answer. No successful task result was produced.");
+            }
             pg.update(&run.id, |r| {
                 r.status = "completed".into();
                 r.reply = summary.into();

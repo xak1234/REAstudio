@@ -216,6 +216,7 @@ cargo test --release -p quixi-workspace --locked
 cargo test --release -p quixi-engine playground::tests --locked
 cargo test --release -p quixi-engine analysis::tests --locked
 cargo test --release -p quixi-engine reconstruction::tests --locked
+cargo test --release -p quixi-engine providers::tests --locked
 ```
 
 Clippy warnings inherited from shared upstream modules may remain; a successful check is not a claim that all upstream warnings were removed. The entire legacy test suite is not used as a Windows compatibility claim.

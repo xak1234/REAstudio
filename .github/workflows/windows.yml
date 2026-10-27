@@ -52,6 +52,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release -p quixi-engine reconstruction::tests --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release -p quixi-engine providers::tests --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build the complete release archive
         if: github.event_name != 'pull_request'
         run: ./scripts/package-windows.ps1 -SkipBuild

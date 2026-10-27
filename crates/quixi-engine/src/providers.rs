@@ -21,8 +21,7 @@ const OPENAI_CODEX_DEVICE_VERIFICATION_URL: &str = "https://auth.openai.com/code
 const OPENAI_CODEX_DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
 
 const XAI_OAUTH_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
-const XAI_OAUTH_SCOPE: &str =
-    "openid profile email offline_access grok-cli:access api:access";
+const XAI_OAUTH_SCOPE: &str = "openid profile email offline_access grok-cli:access api:access";
 const XAI_OAUTH_DISCOVERY_URL: &str = "https://auth.x.ai/.well-known/openid-configuration";
 const XAI_DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
@@ -47,7 +46,7 @@ pub struct ProviderEntry {
     pub priority_rank: usize,
     pub supports_oauth: bool,
     pub oauth_label: Option<String>,
-    pub auth_mode: String, // "api_key" | "oauth" | "custom" | "local"
+    pub auth_mode: String,  // "api_key" | "oauth" | "custom" | "local"
     pub api_format: String, // "openai" | "anthropic"
     pub base_url: String,
     pub api_key_masked: String,
@@ -822,7 +821,10 @@ impl ProviderManager {
         format!("{}••••{}", prefix, suffix)
     }
 
-    fn merge_saved_state(mut catalog: ProvidersStateFile, saved: &Value) -> Option<ProvidersStateFile> {
+    fn merge_saved_state(
+        mut catalog: ProvidersStateFile,
+        saved: &Value,
+    ) -> Option<ProvidersStateFile> {
         let obj = saved.as_object()?;
         if let Some(onb) = obj.get("onboardingCompleted").and_then(|v| v.as_bool()) {
             catalog.onboarding_completed = onb;
@@ -884,7 +886,8 @@ impl ProviderManager {
                     if let Some(oa) = saved_p.get("oauthAccessToken").and_then(|v| v.as_str()) {
                         entry.oauth_access_token = oa.to_string();
                     }
-                    if let Some(or_tok) = saved_p.get("oauthRefreshToken").and_then(|v| v.as_str()) {
+                    if let Some(or_tok) = saved_p.get("oauthRefreshToken").and_then(|v| v.as_str())
+                    {
                         entry.oauth_refresh_token = or_tok.to_string();
                     }
                     if let Some(lbl) = saved_p.get("oauthAccountLabel").and_then(|v| v.as_str()) {
@@ -898,7 +901,8 @@ impl ProviderManager {
                     }
                     if let Some(saved_models) = saved_p.get("models").and_then(|v| v.as_array()) {
                         for sm_val in saved_models {
-                            if let Ok(pm) = serde_json::from_value::<ProviderModelInfo>(sm_val.clone())
+                            if let Ok(pm) =
+                                serde_json::from_value::<ProviderModelInfo>(sm_val.clone())
                             {
                                 if pm.id == "gpt-5.3-codex" {
                                     continue;
@@ -1022,10 +1026,9 @@ impl ProviderManager {
                         entry.custom_models.push(cm.to_string());
                     }
                     if !entry.models.iter().any(|m| m.id == cm) {
-                        entry.models.insert(
-                            0,
-                            Self::model(cm, cm, entry.context_window, true, true),
-                        );
+                        entry
+                            .models
+                            .insert(0, Self::model(cm, cm, entry.context_window, true, true));
                     }
                     entry.selected_model = cm.to_string();
                 }
@@ -1034,10 +1037,9 @@ impl ProviderManager {
                 let sm = sel_model.trim();
                 if !sm.is_empty() {
                     if !entry.models.iter().any(|m| m.id == sm) {
-                        entry.models.insert(
-                            0,
-                            Self::model(sm, sm, entry.context_window, true, true),
-                        );
+                        entry
+                            .models
+                            .insert(0, Self::model(sm, sm, entry.context_window, true, true));
                     }
                     entry.selected_model = sm.to_string();
                 }
@@ -1238,10 +1240,7 @@ impl ProviderManager {
                             message = if discovered_models.is_empty() {
                                 format!("Connected to {} ({})", provider_id, status.as_u16())
                             } else {
-                                format!(
-                                    "Connected ({} models available)",
-                                    discovered_models.len()
-                                )
+                                format!("Connected ({} models available)", discovered_models.len())
                             };
                         } else {
                             message = format!("HTTP {} from {}", status.as_u16(), models_url);
@@ -2370,43 +2369,79 @@ impl ProviderManager {
     /// Attempts a live streaming completion against the connected provider that owns `model_override` (or the active provider),
     /// invoking `on_delta` in real time as each token delta arrives.
     pub fn try_live_completion_streaming<F>(
-        &self, prompt: &str, cwd: &str, history: &[(String, String)],
-        model_override: Option<&str>, on_delta: F,
-    ) -> Option<(String, String, String)> where F: FnMut(&str) {
+        &self,
+        prompt: &str,
+        cwd: &str,
+        history: &[(String, String)],
+        model_override: Option<&str>,
+        on_delta: F,
+    ) -> Option<(String, String, String)>
+    where
+        F: FnMut(&str),
+    {
         self.try_completion_streaming(prompt, cwd, history, model_override, false, on_delta)
     }
 
     /// Coding actions need valid JSON, including escaped Windows paths. Providers
     /// that reject the optional response format receive one ordinary-mode retry.
     pub fn try_live_coding_completion_streaming<F>(
-        &self, prompt: &str, cwd: &str, history: &[(String, String)],
-        model_override: Option<&str>, on_delta: F,
-    ) -> Option<(String, String, String)> where F: FnMut(&str) {
+        &self,
+        prompt: &str,
+        cwd: &str,
+        history: &[(String, String)],
+        model_override: Option<&str>,
+        on_delta: F,
+    ) -> Option<(String, String, String)>
+    where
+        F: FnMut(&str),
+    {
         self.try_completion_streaming(prompt, cwd, history, model_override, true, on_delta)
     }
 
     fn try_completion_streaming<F>(
-        &self, prompt: &str, cwd: &str, history: &[(String, String)],
-        model_override: Option<&str>, json_mode: bool, mut on_delta: F,
-    ) -> Option<(String, String, String)> where F: FnMut(&str) {
-
+        &self,
+        prompt: &str,
+        cwd: &str,
+        history: &[(String, String)],
+        model_override: Option<&str>,
+        json_mode: bool,
+        mut on_delta: F,
+    ) -> Option<(String, String, String)>
+    where
+        F: FnMut(&str),
+    {
         use std::io::{BufRead, BufReader};
 
         let resolved_model = self.resolve_connected_model(model_override);
-        let (provider_id, provider_name, mut model_id, base_url, api_format, auth_mode, mut credential) = {
+        let (
+            provider_id,
+            provider_name,
+            mut model_id,
+            base_url,
+            api_format,
+            auth_mode,
+            mut credential,
+        ) = {
             let st = self.state.read();
-            let entry = st.providers.iter().find(|p| p.id == st.active_provider && p.configured &&
-                (p.selected_model == resolved_model || p.models.iter().any(|m| m.id == resolved_model)))
-                .or_else(|| st
+            let entry = st
                 .providers
                 .iter()
                 .find(|p| {
-                    p.configured
+                    p.id == st.active_provider
+                        && p.configured
                         && (p.selected_model == resolved_model
-                            || p.models.iter().any(|m| {
-                                m.id == resolved_model && Self::is_model_available_for_provider(p, m)
-                            }))
-                }))
+                            || p.models.iter().any(|m| m.id == resolved_model))
+                })
+                .or_else(|| {
+                    st.providers.iter().find(|p| {
+                        p.configured
+                            && (p.selected_model == resolved_model
+                                || p.models.iter().any(|m| {
+                                    m.id == resolved_model
+                                        && Self::is_model_available_for_provider(p, m)
+                                }))
+                    })
+                })
                 .or_else(|| {
                     st.providers
                         .iter()
@@ -2673,10 +2708,17 @@ impl ProviderManager {
                 msgs.push(json!({ "role": "user", "content": prompt }));
             }
             let mut payload = json!({"model":model_id,"messages":msgs,"stream":true});
-            if json_mode { payload["response_format"] = json!({"type":"json_object"}); }
+            if json_mode {
+                payload["response_format"] = json!({"type":"json_object"});
+            }
             let retry = req.try_clone();
             let mut response = req.json(&payload).send();
-            if json_mode && response.as_ref().map(|r| r.status().as_u16() == 400 || r.status().as_u16() == 422).unwrap_or(false) {
+            if json_mode
+                && response
+                    .as_ref()
+                    .map(|r| r.status().as_u16() == 400 || r.status().as_u16() == 422)
+                    .unwrap_or(false)
+            {
                 if let Some(retry) = retry {
                     payload.as_object_mut().unwrap().remove("response_format");
                     response = retry.json(&payload).send();
@@ -2730,6 +2772,72 @@ impl ProviderManager {
             }
         }
 
-        Some((String::new(), provider_name, model_id))
+        // An HTTP error or an empty stream is not a successful completion.
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+
+    #[test]
+    fn streaming_completion_rejects_http_errors_and_empty_answers() {
+        let directory = std::env::temp_dir().join(format!("quixi-provider-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let manager = ProviderManager::new(&directory);
+        for (status, body, expected) in [
+            ("404 Not Found", "{\"error\":\"wrong endpoint\"}", false),
+            ("200 OK", "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\ndata: [DONE]\n\n", false),
+            ("200 OK", "data: {\"choices\":[{\"delta\":{\"content\":\"actual answer\"}}]}\n\ndata: [DONE]\n\n", true),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let server = std::thread::spawn(move || {
+                let started = Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(started.elapsed().as_secs() < 5, "Provider did not connect");
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut size = 0;
+                loop {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" { break; }
+                    if let Some(length) = line.to_lowercase().strip_prefix("content-length:") {
+                        size = length.trim().parse::<usize>().unwrap();
+                    }
+                }
+                reader.read_exact(&mut vec![0; size]).unwrap();
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            });
+            {
+                let mut state = manager.state.write();
+                state.active_provider = "custom".into();
+                state.active_model = "fixture".into();
+                let custom = state.providers.iter_mut().find(|p| p.id == "custom").unwrap();
+                custom.configured = true;
+                custom.selected_model = "fixture".into();
+                custom.base_url = format!("http://{address}/v1");
+                custom.api_key_raw.clear();
+            }
+            let mut deltas = String::new();
+            let answer = manager.try_live_coding_completion_streaming("Test response handling", "fixture", &[], Some("fixture"), |delta| deltas.push_str(delta));
+            server.join().unwrap();
+            assert_eq!(answer.is_some(), expected);
+            if expected { assert_eq!(answer.unwrap().0, "actual answer"); assert_eq!(deltas, "actual answer"); }
+        }
+        fs::remove_dir_all(directory).unwrap();
     }
 }

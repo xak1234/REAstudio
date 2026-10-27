@@ -23,7 +23,7 @@ const QuixiReconstruction = (() => {
   }
   function marker(target) { return `Target: ${JSON.stringify(target)}\n`; }
   function plans(runs, project, target) {
-    return runs.filter(r => r.project === project && r.mode === 'ask' && r.rea_enabled && r.status === 'completed' && r.prompt.startsWith('[Reconstruction brief]\n') && r.prompt.includes(marker(target)));
+    return runs.filter(r => r.project === project && r.mode === 'ask' && r.rea_enabled && r.status === 'completed' && r.reply?.trim() && r.prompt.startsWith('[Reconstruction brief]\n') && r.prompt.includes(marker(target)));
   }
   function prompt({ phase, target, targetIsDirectory = false, project, scope, goal, observations, plan, dossier, reportPath, recordIds = [] }) {
     if (!target) throw new Error('Select the application or feature artifact first.');
