@@ -22,4 +22,6 @@ assert.deepEqual(plans([brief], 'project-1', 'C:\\Original\\different.exe'), [])
 assert.match(prompt({...input,phase:'build',plan:brief,dossier:'quixi-reconstruction-example'}), /quixi-reconstruction-example\/SPEC.md/);
 assert.match(prompt({...input,phase:'retry',dossier:'quixi-reconstruction-example',reportPath:'quixi-oracle-runs/failed.json'}), /actual oracle failure report/);
 assert.match(brief.prompt, /Failed records are limitations/);
+assert.match(prompt({...input,phase:'build',plan:brief}), /oracle file schema is/);
+assert.match(prompt({...input,phase:'build',plan:brief}), /expectationSource/);
 console.log('Reconstruction checks passed: target separation, brief selection, evidence handoff and PE-resource recovery guidance.');
