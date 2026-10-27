@@ -30,6 +30,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --check scripts/smoke-windows.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --check scripts/smoke-mcp.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-analysis.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/check-reconstruction.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Type check and lint Rust
@@ -54,6 +58,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release -p quixi-engine providers::tests --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --release -p quixi-app mcp_server::tests --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build the complete release archive
         if: github.event_name != 'pull_request'
         run: ./scripts/package-windows.ps1 -SkipBuild
@@ -61,7 +67,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: quixidesk-windows-release
+          name: rea-studio-windows-release
           path: |
             dist/*.zip
             dist/*.zip.sha256
@@ -77,7 +83,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: quixidesk-windows-release
+          name: rea-studio-windows-release
           path: release
       - name: Create a reviewable draft release
         env:
@@ -88,5 +94,5 @@ jobs:
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "Release already exists; retaining its verified assets. This build remains available as a workflow artifact."
           else
-            gh release create "$RELEASE_TAG" release/*.zip release/*.sha256 --verify-tag --draft --title "QuixiDesk Windows $RELEASE_TAG" --generate-notes
+            gh release create "$RELEASE_TAG" release/*.zip release/*.sha256 --verify-tag --draft --title "REA Studio $RELEASE_TAG" --generate-notes
           fi

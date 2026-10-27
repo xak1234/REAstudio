@@ -2,10 +2,10 @@
 name = "quixi-app"
 version.workspace = true
 edition.workspace = true
-default-run = "QuixiDesk"
+default-run = "REAStudio"
 
 [[bin]]
-name = "QuixiDesk"
+name = "REAStudio"
 path = "src/main.rs"
 
 [dependencies]
@@ -28,6 +28,9 @@ wry.workspace = true
 http.workspace = true
 url.workspace = true
 dirs.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tiny_http = "=0.12.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc.workspace = true

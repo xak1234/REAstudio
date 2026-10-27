@@ -1,6 +1,7 @@
 //! Public Windows coding playground shell. Only its native APIs and owned UI assets are exposed.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod mcp_server;
 use quixi_engine::QuixiEngine;
 use std::{
     borrow::Cow,
@@ -47,12 +48,13 @@ fn static_asset(root: &Path, path: &str) -> Response<Cow<'static, [u8]>> {
             ("playground/index.html", "text/html; charset=utf-8")
         }
         "/playground/app.js" => ("playground/app.js", "text/javascript; charset=utf-8"),
+        "/playground/analysis.js" => ("playground/analysis.js", "text/javascript; charset=utf-8"),
         "/playground/reconstruction.js" => (
             "playground/reconstruction.js",
             "text/javascript; charset=utf-8",
         ),
         "/playground/style.css" => ("playground/style.css", "text/css; charset=utf-8"),
-        "/quixi-mark.svg" => ("quixi-mark.svg", "image/svg+xml"),
+        "/rea-mark.svg" => ("rea-mark.svg", "image/svg+xml"),
         _ => return response(404, "text/plain", b"Not found".to_vec()),
     };
     match fs::read(root.join(file)) {
@@ -81,7 +83,7 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     if std::env::args().any(|arg| arg == "--version" || arg == "-v") {
-        println!("QuixiDesk Windows {}", env!("CARGO_PKG_VERSION"));
+        println!("REA Studio {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let resources = resources_dir()?;
@@ -90,9 +92,11 @@ fn main() -> anyhow::Result<()> {
         .build()?;
     let _runtime_guard = runtime.enter();
     let engine = QuixiEngine::new(resources.clone());
+    let mcp = Arc::new(mcp_server::McpServer::new(&engine.data_dir));
+    let api_mcp = Arc::clone(&mcp);
     let event_loop = EventLoopBuilder::<()>::new().build();
     let window = WindowBuilder::new()
-        .with_title("QuixiDesk · Coding & REA")
+        .with_title("REA Studio V1.1 · Coding & Reverse Engineering")
         .with_inner_size(LogicalSize::new(1440.0, 920.0))
         .with_min_inner_size(LogicalSize::new(480.0, 360.0))
         .with_visible(false)
@@ -132,6 +136,7 @@ fn main() -> anyhow::Result<()> {
         })
         .with_asynchronous_custom_protocol("app".into(), move |_id, request, responder| {
             let engine = Arc::clone(&api_engine);
+            let mcp = Arc::clone(&api_mcp);
             let root = resources.clone();
             std::thread::spawn(move || {
                 let reply = (|| {
@@ -155,6 +160,18 @@ fn main() -> anyhow::Result<()> {
                     if request.body().len() > 16 * 1024 * 1024 {
                         return response(413, "text/plain", b"Request too large".to_vec());
                     }
+                    if let Some(route) = path.strip_prefix("/api/quixi/mcp/") {
+                        if method != "POST" { return response(405, "text/plain", b"Use POST".to_vec()); }
+                        let body = match serde_json::from_slice::<serde_json::Value>(request.body()) {
+                            Ok(value) => value,
+                            Err(_) => return response(400, "application/json", br#"{"error":"Invalid JSON"}"#.to_vec()),
+                        };
+                        let (status, value) = match mcp.control(&engine, route, &body) {
+                            Ok(value) => (200, value),
+                            Err(error) => (400, serde_json::json!({"error":error.to_string()})),
+                        };
+                        return response(status, "application/json", value.to_string().into_bytes());
+                    }
                     if path.starts_with("/api/quixi/playground/")
                         || path.starts_with("/api/quixi/providers/")
                     {
@@ -165,7 +182,7 @@ fn main() -> anyhow::Result<()> {
                             .unwrap_or(path);
                         let (status, content_type, body) =
                             engine.handle_api_request(method, query, request.body());
-                        return response(status, &content_type, body);
+                        return response(status, content_type, body);
                     }
                     if method != "GET" {
                         return response(405, "text/plain", b"Method not allowed".to_vec());
@@ -186,6 +203,7 @@ fn main() -> anyhow::Result<()> {
             ..
         } = event
         {
+            mcp.stop();
             engine.rea.shutdown();
             *control_flow = ControlFlow::Exit;
         }

@@ -1,14 +1,16 @@
 <div align="center">
-<img src="resources/quixi-logo.svg" alt="QuixiDesk" width="220">
+<img src="resources/rea-logo.svg" alt="REA Studio" width="220">
 
-# QuixiDesk Windows
+# REA Studio
 
 **A native coding playground with an integrated REA reverse engineering workspace.**
 
 [Download Windows release](https://github.com/xak1234/QuixiDesk-Windows/releases) · [Build from source](#build-from-source) · [REA workflow](#reverse-engineering-with-rea) · [Troubleshooting](#troubleshooting)
 </div>
 
-QuixiDesk Windows combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. Its dark playground layout keeps the project on the left, work in the centre, and model/tool settings on the right.
+REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. Its dark playground layout keeps the project on the left, work in the centre, and model/tool settings on the right.
+
+**V1.1 (package version 1.1.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
 
 This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/QuixiAI/QuixiDesk), with a separately implemented playground UI and the upstream MIT attribution preserved. It is an independent community project. It does not include the upstream Classic renderer, extracted application assets, proprietary fonts, example account data, or local machine configuration. See [NOTICE.md](NOTICE.md) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled components.
 
@@ -28,7 +30,7 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 | Toolchain | Detection, configured paths, workflow guides, GUI launch and ten pinned optional portable downloads. |
 | Providers | API-key providers and local/custom OpenAI-compatible endpoints; model selection and connection testing. |
 
-This release does **not** implement multi-agent team orchestration, a full interactive terminal/PTY, a debugger UI, Git staging/commit buttons, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the playground and provider APIs.
+This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY, a debugger UI, Git staging/commit buttons, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
 
 ## Requirements
 
@@ -43,20 +45,20 @@ No global Node, Java, Ghidra, npm, Rust, or administrator installation is needed
 
 ## Install and run
 
-1. Open [Releases](https://github.com/xak1234/QuixiDesk-Windows/releases) and download `QuixiDesk-Windows-REA-1.0.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
+1. Open [Releases](https://github.com/xak1234/QuixiDesk-Windows/releases) and download `REA-Studio-1.1.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
 2. Verify the ZIP in PowerShell:
 
    ```powershell
-   $archive = '.\QuixiDesk-Windows-REA-1.0.0-x64.zip'
+   $archive = '.\REA-Studio-1.1.0-x64.zip'
    $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
    $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
    if ($actual -ne $expected) { throw 'Checksum mismatch: download the release again.' }
    'Checksum OK'
    ```
 
-3. Extract the **whole** archive to a local folder. Keep `resources`, `licenses`, and the runtime DLLs beside `QuixiDesk.exe`.
-4. Run `QuixiDesk.exe`.
-5. Optionally run `Install-QuixiDesk.ps1` from the extracted folder. It copies the application to `%LOCALAPPDATA%\Programs\QuixiDesk` and creates a desktop shortcut. Choose a different location with `-Destination 'D:\Apps\QuixiDesk'`.
+3. Extract the **whole** archive to a local folder. Keep `resources`, `licenses`, and the runtime DLLs beside `REAStudio.exe`.
+4. Run `REAStudio.exe`.
+5. Optionally run `Install-REA-Studio.ps1` from the extracted folder. It copies the application to `%LOCALAPPDATA%\Programs\REA Studio` and creates a desktop shortcut. Choose a different location with `-Destination 'D:\Apps\REA-Studio'`.
 
 The application and installer are unsigned. The installer refuses to overwrite an existing installation; close the app and choose a new folder when upgrading. User data is stored separately, so replacing the application folder preserves saved settings and evidence. To uninstall, remove the application folder and shortcut. Delete the data directories below only if you also want to remove your saved work.
 
@@ -78,11 +80,25 @@ Examples of local endpoint shapes:
 
 These are examples, not a requirement to use those ports. For another computer, enter its address. No private LAN address, access token, provider key, or model is preconfigured in the public release. A successful connection test confirms that the endpoint responds; it does not prove that every advertised model is loaded or supports the coding protocol.
 
+### Environment API keys
+
+Leave the key blank to preserve a saved credential, or look up the provider's environment key when none is saved. Examples: `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY` (then `GOOGLE_API_KEY`). Custom endpoints check `CUSTOM_API_KEY`, then the matching known provider's variable when the endpoint hostname matches exactly. Local servers check `OLLAMA_API_KEY`, `LMSTUDIO_API_KEY`, `VLLM_API_KEY` or `LLAMACPP_API_KEY`; `*_HOST` values are never used as credentials.
+
+Entered keys take priority, followed by the active OAuth credential or saved key, then environment lookup. Environment values are resolved for connection tests and model calls without being copied into settings or public state. Restart REA Studio after changing its inherited environment. Providers shows the source variable, without exposing its value.
+
+### Agent control and Classic access
+
+Open **MCP & Settings**, choose the local port and click **Enable MCP server**. **Connection config** supplies the URL and bearer-token header for a local Streamable HTTP client. The default is `http://127.0.0.1:19456/mcp`. The server starts off on every launch. **Disable MCP server** closes the listener; already accepted commands or model tasks can finish. Use Stop run to cancel a model task separately. **Reset access token** disables the listener and invalidates the previous token for future connections.
+
+Agents can inspect projects, read/write files with conflict checks, run commands, start and inspect tasks, call the static REA tools, export specifications and run oracle checks. The menu shows recent actual tool calls. Provider credentials and MCP settings are not exposed as MCP tools. See [MCP connection and tool reference](docs/MCP.md).
+
+**Classic interface** is collapsed inside the same menu. It opens your earlier installed Classic app with `--classic` in a separate profile, copying provider settings only on the first launch. Choose the earlier executable if it is not beside the current installation. Classic assets are not part of this release.
+
 ### A minimal coding task
 
 In an empty test project, select **Code** and submit:
 
-> Create hello.txt containing exactly Hello from QuixiDesk followed by a newline. Then use PowerShell to read it back. Report the observed output. Do not change any other file.
+> Create hello.txt containing exactly Hello from REA Studio followed by a newline. Then use PowerShell to read it back. Report the observed output. Do not change any other file.
 
 Expected result: a real `hello.txt`, a write event, a command event with exit code 0, and a final response describing the observed text. Model behaviour varies; use the Activity panel and actual file contents as the evidence. The app does not substitute a simulated successful run.
 
@@ -99,7 +115,7 @@ A run is limited to 20 model/tool iterations. Editor files are limited to 2 MiB 
 
 ## Reverse engineering with REA
 
-[REA — Reverse Engineer Anything](https://github.com/morluto/rea) is integrated as a packaged stdio MCP plugin. QuixiDesk keeps one process alive across calls so the active target and live Evidence IDs survive consecutive analysis operations.
+[REA — Reverse Engineer Anything](https://github.com/morluto/rea) is integrated as a packaged stdio MCP plugin. REA Studio keeps one process alive across calls so the active target and live Evidence IDs survive consecutive analysis operations.
 
 ### Bundled components
 
@@ -117,7 +133,7 @@ The plugin receives its own `JAVA_HOME`, `GHIDRA_INSTALL_DIR`, and `PATH`. It do
 1. Open **Reverse engineering** and click **Connect REA**.
 2. Choose an EXE/DLL or a JavaScript application folder with **File…** or **Folder…**. Use a file/folder you are authorised to analyse.
 3. Use a quick action such as **Open native target**, **Imports**, **PE resources**, **.NET metadata**, or **JavaScript / Electron**. Review the real advertised JSON input schema and arguments, then click **Run analysis**. **Open native target** starts Ghidra in the background; it does not open a separate Ghidra desktop window.
-4. For native work, open the binary, list functions or search strings, and use a returned function name/address with **Decompile**. A successful `open_binary` call alone does not prove that deeper native analysis succeeded.
+4. For native work, open the binary and click **Functions**, then **Run analysis**. A paged table shows actual retained functions; click **Decompile** beside a local function to retrieve its code. External imports are labelled separately. **Strings** provides a search field and rejects empty input before calling REA. Guided fields and the advanced JSON editor stay in sync; refreshing the catalog preserves your arguments. A successful `open_binary` call alone does not prove that deeper native analysis succeeded.
 5. Read **Evidence & recovered code**, including limitations. **Complete result** contains the entire retained MCP response. For large live views, use `inspect_analysis_view` with the returned reference to retrieve additional pages.
 6. Use **Use in task** to supply a saved analysis record to the coding agent. **Enable analysis tools for this task** grants the agent the implemented static-analysis subset.
 7. **Export JSON** writes a saved result to a selected folder. **Close target** releases the current live target.
@@ -165,7 +181,7 @@ Provider credentials use the inherited local configuration storage and are **not
 
 Code mode runs with your user permissions and is **not an operating-system sandbox**. File editor operations enforce project containment and reject unsafe Windows paths, but an authorised PowerShell command has the access of your Windows account. Model requests can contain prompts, source text, commands, and analysis results and are sent to the provider you select. An offline model endpoint is required for a wholly local AI workflow.
 
-The public shell has no automation HTTP listener, legacy EIPC routes, or Classic renderer. Native APIs reject foreign browser origins. WebView2 remote debugging is off unless you explicitly enable it for a development/test instance.
+The optional MCP server starts disabled and listens only on 127.0.0.1 when you enable it. MCP & Settings contains connection details and an optional launcher for an earlier installed Classic app. The current shell does not serve legacy EIPC routes. Native APIs reject foreign browser origins. WebView2 remote debugging is off unless you explicitly enable it for a development/test instance.
 
 Optional environment variables, set before launching:
 
@@ -190,7 +206,7 @@ git clone https://github.com/xak1234/QuixiDesk-Windows.git
 cd QuixiDesk-Windows
 cargo build --release --workspace --locked
 .\scripts\prepare-rea-windows.ps1
-.\target\release\QuixiDesk.exe
+.\target\release\REAStudio.exe
 ```
 
 To produce a complete distributable:
@@ -208,6 +224,7 @@ The script builds the locked workspace, obtains pinned/checksummed runtimes, ins
 ```powershell
 node scripts/audit-public.mjs
 node --check resources/playground/app.js
+node scripts/check-analysis.cjs
 node scripts/check-reconstruction.cjs
 cargo check --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked
@@ -217,6 +234,7 @@ cargo test --release -p quixi-engine playground::tests --locked
 cargo test --release -p quixi-engine analysis::tests --locked
 cargo test --release -p quixi-engine reconstruction::tests --locked
 cargo test --release -p quixi-engine providers::tests --locked
+cargo test --release -p quixi-app mcp_server::tests --locked
 ```
 
 Clippy warnings inherited from shared upstream modules may remain; a successful check is not a claim that all upstream warnings were removed. The entire legacy test suite is not used as a Windows compatibility claim.

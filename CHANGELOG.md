@@ -2,6 +2,17 @@
 
 The initial Windows edition includes a reconstruction workflow for selected features or staged application rebuilds, saved task handoff, evidence dossier export, and actionable guidance for PE resource ranges that are not file-backed.
 
+## 1.1.0 — 2026-10-27
+
+- Add an opt-in, token-protected local MCP control server with connection config, request activity and immediate listener disable.
+- Keep Classic access inside the MCP/settings menu through the earlier installed application.
+- Resolve missing provider API keys from matching environment variables for both tests and model calls, without persisting discovered secrets.
+
+- Rename the application to REA Studio V1.1, including the window, executable, installer, shortcut and portable archive. Preserve existing settings and evidence paths.
+- Add guided Strings and Decompile inputs with live-schema preflight, and retain arguments across catalog refreshes.
+- Browse retained native function and string results with paging; decompile local functions directly from their real addresses. Label external imports and preserve incomplete discovery coverage.
+- Keep analysis controls locked while a request or agent task is running.
+
 ## 1.0.0 — 2026-10-27
 
 - Public Windows x64 coding playground with project explorer, editor, Git diffs, PowerShell, provider setup, and saved model runs.

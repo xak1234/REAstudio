@@ -1,4 +1,4 @@
-/* QuixiDesk's native playground. All workspace and analysis results come from Rust APIs. */
+/* REA Studio's native playground. All workspace and analysis results come from Rust APIs. */
 'use strict';
 const $ = id => document.getElementById(id);
 const state = { projects: [], runs: [], providers: {}, project: localStorage.getItem('quixi.project') || '',
@@ -46,7 +46,8 @@ async function refreshState(){
   $('connection').classList.remove('offline');replace('connection',[el('i'),document.createTextNode('Connected')]);
   $('host').textContent=data.host;$('execution-host').textContent=`${data.host} · ${data.platform}`;
   $('terminal-note').textContent=`Commands run locally in the selected project (${data.platform==='windows'?'PowerShell':'native shell'}).`;
-  renderProjects();renderModels();renderRuns();updateControls();renderReconstruction();
+  renderProjects();renderModels();renderRuns();updateControls();renderReconstruction();updateAnalysisControls();
+  if($('mcp-dialog').open)await refreshMcp();
   return data;
 }
 function renderProjects(){
@@ -74,7 +75,7 @@ function renderRuns(){
     replace('console-activity',events.length?events.map(e=>{const n=el('details',undefined,'event'),s=el('summary');const detail=e.detail || {};s.append(el('time',new Date(e.time).toLocaleTimeString()),el('span',e.kind,'event-kind'),el('span',detail.path || detail.tool || detail.command || (detail.step?`Request ${detail.step}`:detail.model || '')));n.append(s,el('pre',JSON.stringify(detail,null,2)));return n;}):[el('p','Actual model requests, file actions and command results appear here.','empty')]);}
 }
 function updateControls(){
-  const active=running();$('start').disabled=!state.project || !$('model').value || !!active || state.busy;$('stop').hidden=!active;$('stop').disabled=active?.status==='stopping';
+  const active=running();$('start').disabled=!state.project || !$('model').value || !!active || state.busy || !!state.rea.operation || !!state.rea.connecting;$('stop').hidden=!active;$('stop').disabled=active?.status==='stopping';
   $('composer-hint').textContent=active?(active.status==='stopping'?'Stopping after the current model request or tool completes.':'Task running · actions appear in Activity'):(state.project?($('mode').value==='code'?'Code mode can edit files and run commands on this computer.':'Ask mode reads files. REA adds static analysis when enabled.'):'Open a project and choose a model.');
   $('status').textContent=active?`Run ${active.status}`:state.project?'Workspace ready':'Open a project';
   $('mode').disabled=!!active;$('model').disabled=!!active;$('rea-enabled').disabled=!!active;
@@ -92,7 +93,7 @@ function renderEditor(){const f=state.file;$('editor').disabled=!f;$('editor').v
 function updateEditor(){const value=$('editor').value;$('dirty').hidden=!state.dirty;$('save').disabled=!state.file || !state.dirty;$('lines').textContent=Array.from({length:value.split('\n').length},(_,i)=>i+1).join('\n');$('file-stats').textContent=`UTF-8 · ${value.split('\n').length} lines · ${new Blob([value]).size.toLocaleString()} bytes`;}
 async function saveFile(){if(!state.file || !state.dirty)return;const result=await pg('write',{path:state.file.path,content:$('editor').value,hash:state.file.hash});state.file={...state.file,content:$('editor').value,hash:result.hash};state.dirty=false;updateEditor();await loadFiles();}
 async function loadDiff(){requireProject();const data=await pg('diff');state.git=data.git;renderGit();const diff=[data.diff,data.staged?'\n--- STAGED CHANGES ---\n'+data.staged:''].filter(Boolean).join('\n');replace('diff',(diff || 'No tracked file changes. New files are listed above.').split('\n').map(line=>el('span',line,line.startsWith('+')?'added':line.startsWith('-')?'removed':line.startsWith('@@')?'hunk':'')));}
-async function startTask(e){e.preventDefault();requireProject();if(state.dirty)throw new Error('Save or discard the current editor changes before starting a task.');
+async function startTask(e){e.preventDefault();requireProject();if(state.rea.operation || state.rea.connecting)throw new Error('Finish the active analysis first.');if(state.dirty)throw new Error('Save or discard the current editor changes before starting a task.');
   const chosen=$('model').selectedOptions[0];if(!chosen?.dataset.model)throw new Error('Configure a model provider first.');
   if($('rea-enabled').checked && !state.rea.connected)await connectRea();
   state.busy=true;updateControls();clearError();
@@ -100,13 +101,14 @@ async function startTask(e){e.preventDefault();requireProject();if(state.dirty)t
     const result=await pg('run',{prompt:$('task').value,model:chosen.dataset.model,mode:$('mode').value,reaEnabled:$('rea-enabled').checked});state.run=result.id;showView('overview');await refreshState();
   }finally{state.busy=false;updateControls();}}
 function providerFormData(){return{providerId:$('provider-id').value,baseUrl:$('base-url').value,apiKey:$('api-key').value,selectedModel:$('model-id').value,customModel:$('model-id').value,completeOnboarding:true};}
-function fillProvider(){const p=(state.providers.providers || []).find(p=>p.id===$('provider-id').value);if(!p)return;$('base-url').value=p.baseUrl || '';$('api-key').value='';$('api-key').placeholder=p.apiKeyMasked || p.keyPlaceholder || 'Optional for local endpoints';$('model-id').value=p.selectedModel || '';replace('provider-models',(p.models || []).map(m=>option(m.id,m.label)));$('provider-message').textContent=p.lastTestedOk===true?'Last connection test succeeded.':'';}
+function fillProvider(){const p=(state.providers.providers || []).find(p=>p.id===$('provider-id').value);if(!p)return;$('base-url').value=p.baseUrl || '';$('api-key').value='';$('api-key').placeholder=p.apiKeyMasked || (p.credentialSource==='environment'?`Using ${p.environmentVariable}`:'Leave blank to check environment');$('provider-env').textContent=p.credentialSource==='environment'?`Credential source: environment · ${p.environmentVariable}. The value is not saved to provider settings.`:`When no key is entered or saved, checks ${(p.environmentCandidates || []).join(', ') || 'no key variable for this provider'}. Restart the app after changing its environment.`;$('model-id').value=p.selectedModel || '';replace('provider-models',(p.models || []).map(m=>option(m.id,m.label)));$('provider-message').textContent=p.lastTestedOk===true?'Last connection test succeeded.':'';}
 function showProviders(){replace('provider-id',(state.providers.providers||[]).map(p=>option(p.id,p.name)));$('provider-id').value=state.providers.activeProvider || $('provider-id').value;fillProvider();$('provider-dialog').showModal();}
 
 // REA: live catalog + availability, persistent artifact selection, full result history.
 function unwrap(response){if(response?.structuredContent)return response.structuredContent;for(const c of response?.content || [])if(c.type==='text'){try{return JSON.parse(c.text);}catch{}}return response;}
 function sessionResult(value){return value?.result || value;}
 async function connectRea(){
+  state.rea.connecting=true;updateAnalysisControls();updateControls();
   $('rea-health').textContent='Starting the bundled plugin and checking providers…';$('rea-health').classList.add('busy');
   try{const result=await pg('rea/connect',$('rea-runtime').value?{mode:$('rea-runtime').value}:{});$('rea-runtime').value=result.mode;state.rea.connected=true;state.rea.tools=result.tools || [];state.rea.session=result.session;state.rea.availability.clear();
     const session=sessionResult(result.session);for(const group of session.tool_availability?.groups || [])for(const name of group.names)state.rea.availability.set(name,group);
@@ -115,31 +117,46 @@ async function connectRea(){
     const ghidra=providers.find(p=>(p.id || p.provider_id || p.provider?.id)==='ghidra');
     const version=session.server_identity?.package_version || session.server_identity?.package?.version || session.server_identity?.version || '';
     $('rea-health').textContent=`REA ${version} (${result.mode}) connected · ${available} currently available tools / ${state.rea.tools.length} advertised.\n${session.path || session.target?.path || session.binary_path || 'Select an artifact and open it to enable target-specific tools.'}${ghidra?`\nGhidra: ${ghidra.availability?.status || String(ghidra.available ?? 'check tool availability')}`:''}`;
-    $('rea-badge').textContent='Connected';$('rea-badge').className='badge completed';$('rea-connect').textContent='Refresh tools';renderTools();
-  }catch(e){state.rea.connected=false;$('rea-badge').textContent='Unavailable';$('rea-badge').className='badge failed';$('rea-health').textContent=e.message;throw e;}finally{$('rea-health').classList.remove('busy');}
+    $('rea-badge').textContent='Connected';$('rea-badge').className='badge completed';$('rea-connect').textContent='Refresh tools';renderTools(undefined,true);
+  }catch(e){state.rea.connected=false;$('rea-badge').textContent='Unavailable';$('rea-badge').className='badge failed';$('rea-health').textContent=e.message;throw e;}finally{state.rea.connecting=false;$('rea-health').classList.remove('busy');updateAnalysisControls();updateControls();}
 }
-function renderTools(preferred){
+function renderTools(preferred,preserve=false){
+  const previous=$('rea-tool').value,draft=$('rea-arguments').value;
   const old=preferred || $('rea-tool').value;const query=$('rea-search').value.trim().toLowerCase();
   const tools=state.rea.tools.filter(t=>!query || `${t.name} ${t.description}`.toLowerCase().includes(query));
   tools.sort((a,b)=>Number(!!state.rea.availability.get(b.name)?.available)-Number(!!state.rea.availability.get(a.name)?.available) || a.name.localeCompare(b.name));
   replace('rea-tool',tools.length?tools.map(t=>{const availability=state.rea.availability.get(t.name);const o=option(t.name,`${availability?.available?'●':'○'} ${t.name}`);o.title=availability?.remediation || '';return o;}):[option('','No matching tools')]);
   if(tools.some(t=>t.name===old))$('rea-tool').value=old;else if(tools.some(t=>t.name==='open_binary'))$('rea-tool').value='open_binary';
   toolChanged();
+  if(preserve && previous===$('rea-tool').value){$('rea-arguments').value=draft;syncAnalysisInputs();}
 }
 function toolChanged(){
   const tool=state.rea.tools.find(t=>t.name===$('rea-tool').value);const availability=state.rea.availability.get(tool?.name);
   $('rea-description').textContent=tool?.description || '';$('rea-schema').textContent=JSON.stringify(tool?.inputSchema || {},null,2);
   $('rea-availability').textContent=availability && !availability.available?`${availability.reason}: ${availability.remediation || 'Unavailable for this target or host.'}`:'';
-  $('rea-run').disabled=!tool || availability?.available===false;
-  const properties=tool?.inputSchema?.properties || {},args={};
-  for(const key of ['path','input_path'])if(properties[key] && state.rea.target)args[key]=state.rea.target;
-  if(properties.provider_id && tool.name==='open_binary' && $('rea-provider').value)args.provider_id=$('rea-provider').value;
-  for(const key of tool?.inputSchema?.required || [])if(!(key in args)){
-    const schema=properties[key] || {};args[key]=schema.default ?? schema.const ?? schema.enum?.[0] ?? (schema.type==='number'||schema.type==='integer'?0:schema.type==='boolean'?false:schema.type==='object'?{}:schema.type==='array'?[]:'');
-  }
-  if(properties.detail)args.detail='summary';
-  if(properties.limit)args.limit=Math.min(Number(properties.limit.default)||50,50);
+  const properties=tool?.inputSchema?.properties || {},args=QuixiAnalysis.defaults(tool || {},state.rea.target,$('rea-provider').value);
   $('rea-arguments').value=JSON.stringify(args,null,2);
+  const inputs=[];
+  for(const key of ['pattern','procedure'])if(properties[key]?.type==='string'){
+    const label=el('label',key==='pattern'?'Search text or regular expression':'Function name or address','field-label');label.htmlFor=`rea-input-${key}`;
+    const input=el('input');input.id=`rea-input-${key}`;input.dataset.argument=key;input.type='text';input.autocomplete='off';input.spellcheck=false;
+    input.placeholder=key==='pattern'?'Enter text to find…':'Choose a function from Functions, or enter its address';
+    input.addEventListener('input',()=>{try{const args=JSON.parse($('rea-arguments').value);if(!args || typeof args!=='object' || Array.isArray(args))throw new Error('Correct the JSON arguments first.');args[key]=input.value;$('rea-arguments').value=JSON.stringify(args,null,2);updateAnalysisControls();}catch(e){error(e);}});
+    inputs.push(label,input);
+  }
+  replace('rea-inputs',inputs);syncAnalysisInputs();
+}
+function syncAnalysisInputs(){
+  try{const args=JSON.parse($('rea-arguments').value);for(const input of $('rea-inputs').querySelectorAll('input'))input.value=typeof args?.[input.dataset.argument]==='string'?args[input.dataset.argument]:'';}catch{/* Keep an incomplete JSON draft visible. */}
+  updateAnalysisControls();
+}
+function updateAnalysisControls(){
+  const tool=state.rea.tools.find(t=>t.name===$('rea-tool').value),locked=!!state.rea.operation || !!state.rea.connecting || !!running();
+  let issues=[];try{if(tool)issues=QuixiAnalysis.issues(tool,JSON.parse($('rea-arguments').value));}catch{issues=['Arguments must be valid JSON.'];}
+  $('rea-validation').textContent=issues.join('\n');$('rea-validation').hidden=!issues.length;
+  $('rea-run').disabled=locked || !tool || state.rea.availability.get(tool?.name)?.available===false || !!issues.length;
+  for(const id of ['rea-connect','rea-close','rea-restart','rea-runtime','rea-provider','artifact-file','artifact-folder','artifact-set-path','rea-tool','rea-search','rea-arguments'])$(id).disabled=locked;
+  for(const b of document.querySelectorAll('[data-rea-tool], #rea-inputs input, [data-analysis-action]'))b.disabled=locked;
 }
 async function loadAnalysisHistory(){const result=await pg('rea/inventory');state.rea.target=result.target || '';state.rea.targetIsDirectory=!!result.targetIsDirectory;state.rea.records=result.records || [];
   $('artifact-path').textContent=state.rea.target || 'EXE · DLL · .NET · ASAR · JavaScript · archives';$('artifact-path').title=state.rea.target;$('artifact-name').textContent=state.rea.target.split(/[\\/]/).pop() || 'Select an artifact';
@@ -147,10 +164,25 @@ async function loadAnalysisHistory(){const result=await pg('rea/inventory');stat
   renderReconstruction();
   await loadDossiers();
 }
-async function selectArtifact(data){if(running())throw new Error('Finish the active task before changing its analysis target.');const result=await pg('rea/select',data);if(result.cancelled)return;await loadAnalysisHistory();toolChanged();}
+async function selectArtifact(data){if(running() || state.rea.operation)throw new Error('Finish the active analysis before changing its target.');const result=await pg('rea/select',data);if(result.cancelled)return;state.rea.record=null;$('rea-use').disabled=true;$('rea-export').disabled=true;$('recovered-code').hidden=true;$('rea-output').textContent='';replace('evidence-summary',[el('p','Artifact selected. Open it for native analysis, then browse Functions or search Strings.','muted')]);await loadAnalysisHistory();toolChanged();}
 async function runRea(e){e.preventDefault();const tool=$('rea-tool').value;let args;try{args=JSON.parse($('rea-arguments').value);}catch{throw new Error('Arguments must be valid JSON.');}
-  if(!args || typeof args!=='object' || Array.isArray(args))throw new Error('Arguments must be a JSON object.');
-  await busy($('rea-run'),async()=>{$('rea-health').textContent=`Running ${tool}… Native import and analysis can take several minutes.`;const record=await pg('rea/tool',{tool,arguments:args});await loadAnalysisHistory();$('rea-record').value=record.id;renderEvidence(record);await connectRea();},'Analysing…');
+  await executeAnalysis(tool,args);
+}
+async function executeAnalysis(tool,args,browse=true){
+  if(state.rea.operation || running())throw new Error('Finish the active task or analysis first.');
+  const declared=state.rea.tools.find(t=>t.name===tool);if(!declared)throw new Error('Refresh the live REA tool catalog first.');
+  const issues=QuixiAnalysis.issues(declared,args);if(issues.length)throw new Error(issues.join('\n'));
+  state.rea.operation=true;updateAnalysisControls();updateControls();
+  try{await busy($('rea-run'),async()=>{
+    $('rea-health').textContent=`Running ${tool}… Native import and analysis can take several minutes.`;
+    let record=await pg('rea/tool',{tool,arguments:args});
+    const view=!record.failed && QuixiAnalysis.nativeView(unwrap(record.response));
+    if(browse && view?.kind==='summary' && state.rea.tools.some(t=>t.name==='inspect_analysis_view')){
+      // The summary retains the provider's rows; paging does not reanalyse the binary.
+      record=await pg('rea/tool',{tool:'inspect_analysis_view',arguments:QuixiAnalysis.pageArguments(view,0)});
+    }
+    await loadAnalysisHistory();$('rea-record').value=record.id;renderEvidence(record);await connectRea();
+  },'Analysing…');}finally{state.rea.operation=false;updateAnalysisControls();updateControls();}
 }
 function collectValues(value, keys, found=[], depth=0){if(depth>14 || !value || typeof value!=='object')return found;for(const [key,v] of Object.entries(value)){if(keys.has(key))found.push(v);if(typeof v==='object')collectValues(v,keys,found,depth+1);}return found;}
 function renderEvidence(record){
@@ -165,16 +197,48 @@ function renderEvidence(record){
   const failure=QuixiReconstruction.failure(record,value);
   if(failure){nodes.push(el('p',failure.message,'analysis-error'),el('p',failure.guidance,'field-note'));
     if(failure.nextTool){const b=el('button','Prepare native analysis','small');b.onclick=()=>prepareReaTool(failure.nextTool).catch(error);nodes.push(b);}}
+  const view=!record.failed && QuixiAnalysis.nativeView(value);
+  if(view)renderNativeInventory(record,view,nodes);
+  else if(value?.normalized_result?.summary){const summary=el('details');summary.append(el('summary','Returned observations'),el('pre',JSON.stringify(value.normalized_result.summary,null,2)));nodes.push(summary);}
   if(!record.failed && !facts.length && !limits.length && !ids.length)nodes.push(el('p','Open Complete result below to inspect the returned observations and metadata.','muted'));
-  replace('evidence-summary',nodes);
   const code=collectValues(value,new Set(['pseudocode','pseudo_code','assembly','decompiled_code',...(/pseudo|assembly/.test(record.tool)?['normalized_result']:[])])).filter(v=>typeof v==='string' && v.trim()).join('\n\n');
   $('recovered-code').hidden=!code;$('recovered-code').textContent=code;
+  if(!record.failed && record.tool==='procedure_pseudo_code' && !code)nodes.push(el('p','The provider returned no decompiled code for this function. Review the complete result and limitations.','field-note'));
+  replace('evidence-summary',nodes);updateAnalysisControls();
+}
+
+function renderNativeInventory(record,view,nodes){
+  const functions=/procedures$/.test(view.parent_operation),label=functions?'functions':'strings / names';
+  const same=QuixiAnalysis.sameTarget(record.target,state.rea.target);
+  const action=(title,handler)=>{const b=el('button',title,'small');b.type='button';b.dataset.analysisAction='';b.onclick=()=>{if(!QuixiAnalysis.sameTarget(record.target,state.rea.target)){error(new Error('Select this evidence record’s artifact before using its live analysis.'));return;}handler().catch(error);};return b;};
+  if(!same)nodes.push(el('p','This saved result belongs to another artifact. Select that artifact before browsing its live evidence.','field-note'));
+  if(view.kind==='summary'){
+    nodes.push(el('p',`${view.summary?.row_count ?? 'Unknown number of'} retained ${label}. Discovery coverage remains ${view.summary?.discovery_coverage || 'unknown'}.`));
+    nodes.push(action(`Browse ${label}`,()=>executeAnalysis('inspect_analysis_view',QuixiAnalysis.pageArguments(view,0),false)));return;
+  }
+  const rows=view.rows || [],offset=view.view?.offset || 0,limit=view.view?.limit || 50;
+  nodes.push(el('h3',`${functions?'Functions':'Strings / names'} · ${rows.length ? offset+1 : 0}–${offset+rows.length} of ${view.coverage?.total ?? '?'} retained rows`));
+  nodes.push(el('p','These are the provider’s observed rows. This count does not prove complete discovery.','field-note'));
+  const scroll=el('div',undefined,'inventory-scroll'),table=el('table',undefined,'inventory-table'),head=el('tr');
+  for(const title of ['Address',functions?'Function':'Value',functions?'Action':'Kind'])head.append(el('th',title));
+  const thead=el('thead');thead.append(head);table.append(thead);const tbody=el('tbody');
+  for(const row of rows){const r=row.record || {},tr=el('tr');tr.append(el('td',r.address || '—'),el('td',typeof r.value==='string'?r.value:JSON.stringify(r.value ?? r)));const td=el('td'),procedure=functions && QuixiAnalysis.procedure(row);
+    if(procedure){td.append(action('Decompile',async()=>{await prepareReaTool('procedure_pseudo_code');const args=JSON.parse($('rea-arguments').value);args.procedure=procedure;$('rea-arguments').value=JSON.stringify(args,null,2);syncAnalysisInputs();await executeAnalysis('procedure_pseudo_code',args,false);}));}
+    else td.textContent=functions?'External import':r.string?.encoding || 'Observed';tr.append(td);tbody.append(tr);
+  }
+  table.append(tbody);scroll.append(table);nodes.push(scroll);
+  if(!rows.length)nodes.push(el('p','No matching rows were returned.','muted'));
+  const nav=el('div',undefined,'inventory-pagination');
+  if(offset>0)nav.append(action('Previous page',()=>executeAnalysis('inspect_analysis_view',QuixiAnalysis.pageArguments(view,Math.max(0,offset-limit),limit),false)));
+  if(Number.isInteger(view.coverage?.next_offset) && view.coverage.next_offset>offset)nav.append(action('Next page',()=>executeAnalysis('inspect_analysis_view',QuixiAnalysis.pageArguments(view,view.coverage.next_offset,limit),false)));
+  nodes.push(nav);
 }
 
 async function prepareReaTool(name){
+  if(state.rea.operation || running())throw new Error('Finish the active task or analysis first.');
   if(!state.rea.connected)await connectRea();
   if(!state.rea.tools.some(t=>t.name===name))throw new Error(`This REA version does not advertise ${name}. Refresh tools or choose another supported tool.`);
-  $('rea-search').value='';renderTools(name);$('rea-arguments').focus();
+  $('rea-search').value='';renderTools(name);($('rea-inputs').querySelector('input') || $('rea-arguments')).focus();
   $('rea-health').textContent=`${name} selected. Review the arguments, then click Run analysis. Opening a native target uses Ghidra in the background.`;
 }
 function reconstructionInput(phase){
@@ -228,6 +292,25 @@ async function loadToolchain(){
 let workflowOffset=0,workflowTotal=0;
 async function readWorkflow(offset=0){const result=await pg('rea/workflow',{path:$('workflow-guide').value,offset});$('workflow-content').textContent=`${result.package} ${result.version}\n${result.note}\n\n${result.content}`;workflowOffset=result.nextOffset;workflowTotal=result.totalCharacters;$('workflow-next').disabled=workflowOffset>=workflowTotal;}
 
+const mcpApi=(route,data={})=>api(route,data,'/api/quixi/mcp/');
+let mcpState={enabled:false};
+async function refreshMcp(){
+  mcpState=await mcpApi('status');$('mcp-status').textContent=mcpState.enabled?'Enabled':'Disabled';$('mcp-status').className=`badge ${mcpState.enabled?'completed':''}`;
+  $('mcp-active').textContent=mcpState.activeRequests?`${mcpState.activeRequests} active request(s)`:'';
+  if(document.activeElement!==$('mcp-port'))$('mcp-port').value=mcpState.port;
+  $('mcp-port').disabled=mcpState.enabled;$('mcp-url').textContent=mcpState.url;$('mcp-toggle').textContent=mcpState.enabled?'Disable MCP server':'Enable MCP server';
+  $('classic-open').disabled=!mcpState.classicAvailable;
+  replace('mcp-events',(mcpState.events || []).length?mcpState.events.map(e=>el('p',`${new Date(e.time).toLocaleTimeString()} · ${e.tool} · ${e.failed?'failed':'completed'} · ${e.durationMs} ms`)):[el('p','No calls yet.')]);
+}
+on('mcp-settings','click',async()=>{$('mcp-dialog').showModal();await refreshMcp();});
+on('mcp-close','click',()=>$('mcp-dialog').close());
+on('mcp-dialog','close',()=>{$('mcp-config-output').hidden=true;$('mcp-config-output').textContent='';});
+on('mcp-toggle','click',async()=>{await busy($('mcp-toggle'),async()=>{await mcpApi(mcpState.enabled?'disable':'enable',{port:Number($('mcp-port').value)});});await refreshMcp();});
+on('mcp-config','click',async()=>{const config=await mcpApi('config');if(!$('mcp-dialog').open)return;$('mcp-config-output').textContent=JSON.stringify(config,null,2);$('mcp-config-output').hidden=false;$('mcp-message').textContent='Use this Streamable HTTP configuration in your local MCP client. It contains your access token.';});
+on('mcp-rotate','click',async()=>{await mcpApi('rotate');$('mcp-config-output').hidden=true;$('mcp-config-output').textContent='';$('mcp-message').textContent='Access token reset. Re-enable the server and update your client connection config.';await refreshMcp();});
+on('classic-configure','click',async()=>{await mcpApi('classic-configure');await refreshMcp();});
+on('classic-open','click',()=>busy($('classic-open'),async()=>{await mcpApi('classic-open');$('mcp-message').textContent='Classic opened in a separate window.';},'Opening…'));
+
 // Events
 for(const b of document.querySelectorAll('[data-view]'))b.onclick=()=>showView(b.dataset.view);
 for(const b of document.querySelectorAll('[data-console]'))b.onclick=()=>showConsole(b.dataset.console);
@@ -264,8 +347,8 @@ on('open-bench','click',()=>pg('open-bench'));
 on('show-analysis','click',()=>showView('analysis'));on('rea-connect','click',()=>busy($('rea-connect'),connectRea,'Connecting…'));
 on('rea-runtime','change',()=>busy($('rea-connect'),connectRea,'Connecting…'));
 on('artifact-file','click',()=>selectArtifact({}));on('artifact-folder','click',()=>selectArtifact({directory:true}));on('artifact-set-path','click',async()=>{const path=await askText('Select an artifact','Absolute path to a file or application folder',state.rea.target);if(path)await selectArtifact({path});});
-on('rea-search','input',()=>renderTools());on('rea-tool','change',toolChanged);on('rea-form','submit',runRea);
-on('rea-close','click',async()=>{if(!state.rea.connected)return;const record=await pg('rea/tool',{tool:'close_binary',arguments:{}});await loadAnalysisHistory();$('rea-record').value=record.id;renderEvidence(record);await connectRea();});
+on('rea-search','input',()=>renderTools(undefined,true));on('rea-tool','change',toolChanged);on('rea-form','submit',runRea);on('rea-arguments','input',syncAnalysisInputs);
+on('rea-close','click',()=>executeAnalysis('close_binary',{},false));
 on('rea-record','change',async()=>{if($('rea-record').value)renderEvidence(await pg('rea/evidence',{id:$('rea-record').value}));});
 on('rea-use','click',()=>{if(!state.rea.record)return;const r=state.rea.record;$('rea-enabled').checked=true;$('task').value=`Use the saved REA analysis record ${r.id} (${r.tool}) for ${r.target}. Explain the observed behaviour, cite Evidence IDs, distinguish inferences and limitations, and suggest the next implementation step in this project.`;showView('overview');$('task').focus();});
 on('rea-export','click',async()=>{if(!state.rea.record)return;const result=await pg('rea/export',{id:state.rea.record.id});if(result.path)$('rea-health').textContent=`Evidence exported to ${result.path}`;});

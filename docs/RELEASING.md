@@ -10,9 +10,9 @@ The source repository and portable application are separate artifacts. Keep runt
 4. Commit the reviewed source to `main`. Create and push a matching annotated tag:
 
    ```powershell
-   git tag -a v1.0.0 -m 'QuixiDesk Windows 1.0.0'
+   git tag -a v1.1.0 -m 'REA Studio 1.1.0'
    git push origin main
-   git push origin v1.0.0
+   git push origin v1.1.0
    ```
 
 5. The Windows workflow rebuilds and tests the tagged source, uploads its artifacts, and creates a **draft** GitHub Release with the ZIP and `.sha256` sidecar. Review its notes and assets, then publish the draft. This is not a GitHub Pages deployment.
@@ -24,12 +24,12 @@ Do not reuse a published tag or overwrite a published archive. Fixes should rece
 If publishing a locally verified build rather than the workflow artifact, authenticate GitHub CLI normally and use:
 
 ```powershell
-gh release create v1.0.0 `
-  .\dist\QuixiDesk-Windows-REA-1.0.0-x64.zip `
-  .\dist\QuixiDesk-Windows-REA-1.0.0-x64.zip.sha256 `
+gh release create v1.1.0 `
+  .\dist\REA-Studio-1.1.0-x64.zip `
+  .\dist\REA-Studio-1.1.0-x64.zip.sha256 `
   --repo xak1234/QuixiDesk-Windows `
-  --verify-tag --draft --title 'QuixiDesk Windows 1.0.0' `
-  --notes-file .\docs\release-notes-1.0.0.md
+  --verify-tag --draft --title 'REA Studio 1.1.0' `
+  --notes-file .\docs\release-notes-1.1.0.md
 ```
 
 Use the exact source commit recorded in the package's BUILD-INFO.json. Review and publish the draft using GitHub's Releases interface. No personal access token belongs in the repository or in a command copied into the README.

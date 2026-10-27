@@ -1,4 +1,4 @@
-// Integration check against the running QuixiDesk WebView2, with a dedicated test profile.
+// Integration check against the running REA Studio WebView2, with a dedicated test profile.
 // npm install playwright-core@1.58.2 in a separate test directory; set QUIXI_TEST_PLAYWRIGHT_MODULE.
 const { chromium } = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwright-core');
 const fs = require('node:fs');
@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 (async()=>{
   const browser=await chromium.connectOverCDP('http://127.0.0.1:9322');
   const page=browser.contexts()[0].pages().find(p=>p.url().includes('app.localhost/playground'));
-  assert(page,'QuixiDesk playground webview was not found');
+  assert(page,'REA Studio playground webview was not found');
   page.setDefaultTimeout(20000);
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const call=(route,data={})=>page.evaluate(async({route,data})=>{const r=await fetch('/api/quixi/playground/'+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const v=await r.json();if(!r.ok)throw new Error(JSON.stringify(v));return v;},{route,data});
@@ -40,6 +40,38 @@ const assert = require('node:assert/strict');
   await page.locator('[data-rea-tool=open_binary]').click();await page.locator('#rea-run').click();
   await page.waitForFunction(()=>document.getElementById('rea-run').textContent.includes('Run analysis') && !document.getElementById('rea-run').disabled,{},{timeout:90000});
   assert.match(await page.locator('#evidence-summary').textContent(),/Analysis saved/);
+  assert.match(await page.title(),/REA Studio V1.1/);
+  await page.locator('[data-rea-tool=search_strings]').click();
+  assert.equal(await page.locator('#rea-run').isDisabled(),true);
+  assert.match(await page.locator('#rea-validation').textContent(),/enter text/);
+  await page.locator('#rea-input-pattern').fill('quixi');
+  assert.equal(JSON.parse(await page.locator('#rea-arguments').inputValue()).pattern,'quixi');
+  await page.locator('#rea-connect').click();
+  await page.waitForFunction(()=>!document.getElementById('rea-connect').disabled);
+  assert.equal(await page.locator('#rea-input-pattern').inputValue(),'quixi');
+  await page.locator('#rea-arguments').fill('{"pattern":"from JSON","detail":"summary"}');
+  assert.equal(await page.locator('#rea-input-pattern').inputValue(),'from JSON');
+  await page.locator('[data-rea-tool=procedure_pseudo_code]').click();
+  assert.equal(await page.locator('#rea-run').isDisabled(),true);
+  await page.locator('[data-rea-tool=list_procedures]').click();await page.locator('#rea-run').click();
+  await page.locator('.inventory-table').waitFor({timeout:90000});
+  await page.waitForFunction(()=>!document.getElementById('rea-run').disabled);
+  const inventory=JSON.parse(await page.locator('#rea-output').textContent());
+  assert.equal(inventory.failed,false);
+  const retained=inventory.response.structuredContent.normalized_result.parent_evidence_id;
+  await page.evaluate(async retained=>{await executeAnalysis('inspect_analysis_view',{source:{kind:'retained-evidence',evidence_id:retained},view:{kind:'native-inventory',offset:0,limit:1}},false);},retained);
+  assert.equal(await page.locator('.inventory-table tbody tr').count(),1);
+  await page.locator('.inventory-pagination button').filter({hasText:'Next page'}).click();
+  await page.waitForFunction(()=>JSON.parse(document.getElementById('rea-output').textContent).arguments.view.offset===1);
+  await page.waitForFunction(()=>!document.querySelector('.inventory-pagination button').disabled);
+  await page.locator('.inventory-pagination button').filter({hasText:'Previous page'}).click();
+  await page.waitForFunction(()=>JSON.parse(document.getElementById('rea-output').textContent).arguments.view.offset===0);
+  await page.waitForFunction(()=>!document.querySelector('.inventory-pagination button').disabled);
+  await page.locator('[data-rea-tool=search_procedures]').click();await page.locator('#rea-input-pattern').fill('quixi_add');await page.locator('#rea-run').click();
+  await page.locator('.inventory-table tbody tr').filter({hasText:'quixi_add'}).waitFor({timeout:90000});
+  await page.locator('.inventory-table tbody tr').filter({hasText:'quixi_add'}).getByRole('button',{name:'Decompile'}).click();
+  await page.waitForFunction(()=>document.getElementById('recovered-code').textContent.includes('return'),{},{timeout:90000});
+  console.log('REA Studio: branding, guided inputs, refresh preservation, real inventory paging and row decompilation passed');
   const native=await call('rea/tool',{tool:'analyze_function',arguments:{procedure:'quixi_add'}});
   fs.writeFileSync(root+'\\rea-native.json',JSON.stringify(native,null,2));assert.equal(native.failed,false,JSON.stringify(native).slice(0,2000));
   const code=await call('rea/tool',{tool:'procedure_pseudo_code',arguments:{procedure:'quixi_add'}});

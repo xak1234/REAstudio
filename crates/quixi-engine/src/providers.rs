@@ -964,9 +964,61 @@ impl ProviderManager {
         }
     }
 
+    fn environment_key_names(entry: &ProviderEntry, base_url: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        // Local catalog entries historically use *_HOST; those are URLs, never credentials.
+        let primary = match entry.id.as_str() {
+            "ollama" => "OLLAMA_API_KEY",
+            "lmstudio" => "LMSTUDIO_API_KEY",
+            "vllm" => "VLLM_API_KEY",
+            "llamacpp" => "LLAMACPP_API_KEY",
+            _ => entry.env_var.as_str(),
+        };
+        if primary.ends_with("_API_KEY") { names.push(primary.to_owned()); }
+        if entry.id == "custom" {
+            let host = url::Url::parse(base_url).ok().and_then(|u| u.host_str().map(str::to_owned));
+            if let Some(host) = host {
+                for known in Self::default_catalog().providers {
+                    if known.id != "custom" && known.category != "local"
+                        && url::Url::parse(&known.base_url).ok().and_then(|u| u.host_str().map(str::to_owned)).as_deref() == Some(host.as_str())
+                        && known.env_var.ends_with("_API_KEY") && !names.contains(&known.env_var) {
+                        names.push(known.env_var);
+                    }
+                }
+            }
+        }
+        if names.iter().any(|n| n == "GEMINI_API_KEY") { names.push("GOOGLE_API_KEY".into()); }
+        names
+    }
+
+    fn resolve_key_with(entry: &ProviderEntry, supplied: &str, base_url: &str, lookup: impl Fn(&str) -> Option<String>) -> (String, String, Option<String>) {
+        let supplied = supplied.trim();
+        if !supplied.is_empty() && !supplied.contains("••••") { return (supplied.into(), "entered".into(), None); }
+        if entry.auth_mode == "oauth" && !entry.oauth_access_token.is_empty() { return (entry.oauth_access_token.clone(), "oauth".into(), None); }
+        if !entry.api_key_raw.trim().is_empty() { return (entry.api_key_raw.clone(), "saved".into(), None); }
+        for name in Self::environment_key_names(entry, base_url) {
+            if let Some(value) = lookup(&name).filter(|s| !s.trim().is_empty()) {
+                return (value.trim().into(), "environment".into(), Some(name));
+            }
+        }
+        (String::new(), "none".into(), None)
+    }
+
+    fn resolve_key(entry: &ProviderEntry, supplied: &str, base_url: &str) -> (String, String, Option<String>) {
+        Self::resolve_key_with(entry, supplied, base_url, |name| std::env::var(name).ok())
+    }
+
     pub fn get_public_state(&self) -> Value {
         let st = self.state.read();
         let configured_count = st.providers.iter().filter(|p| p.configured).count();
+        let providers: Vec<Value> = st.providers.iter().map(|entry| {
+            let (_, source, variable) = Self::resolve_key(entry, "", &entry.base_url);
+            let mut public = serde_json::to_value(entry).expect("provider serialization");
+            public["credentialSource"] = json!(source);
+            public["environmentVariable"] = json!(variable);
+            public["environmentCandidates"] = json!(Self::environment_key_names(entry, &entry.base_url));
+            public
+        }).collect();
         json!({
             "onboardingCompleted": st.onboarding_completed && configured_count > 0,
             "hasConfiguredProvider": configured_count > 0,
@@ -975,7 +1027,7 @@ impl ProviderManager {
             "activeModel": st.active_model,
             "subagentProvider": st.subagent_provider,
             "subagentModel": st.subagent_model,
-            "providers": st.providers,
+            "providers": providers,
         })
     }
 
@@ -1162,13 +1214,7 @@ impl ProviderManager {
                 } else {
                     entry.base_url.trim_end_matches('/').to_string()
                 };
-                let key = if !supplied_key.is_empty() && !supplied_key.contains("••••") {
-                    supplied_key.to_string()
-                } else if !entry.oauth_access_token.is_empty() {
-                    entry.oauth_access_token.clone()
-                } else {
-                    entry.api_key_raw.clone()
-                };
+                let key = Self::resolve_key(entry, supplied_key, &url).0;
                 (
                     url,
                     key,
@@ -2449,11 +2495,7 @@ impl ProviderManager {
                 })
                 .or_else(|| st.providers.iter().find(|p| p.configured))?;
 
-            let cred = if entry.auth_mode == "oauth" && !entry.oauth_access_token.is_empty() {
-                entry.oauth_access_token.clone()
-            } else {
-                entry.api_key_raw.clone()
-            };
+            let cred = Self::resolve_key(entry, "", &entry.base_url).0;
 
             let chosen_model = if entry.models.iter().any(|m| m.id == resolved_model)
                 || entry.selected_model == resolved_model
@@ -2480,7 +2522,7 @@ impl ProviderManager {
             .ok()?;
 
         let sys_prompt = format!(
-            "You are QuixiDesk, a native Rust AI desktop assistant and coding workspace agent. Active workspace: {}. Follow the tool protocol in the task instructions. Use supplied file contents and actual tool results as evidence. Read files before making claims about them; do not invent tool calls, tests or successful changes in {}.",
+            "You are REA Studio, a native Rust AI desktop assistant and coding workspace agent. Active workspace: {}. Follow the tool protocol in the task instructions. Use supplied file contents and actual tool results as evidence. Read files before making claims about them; do not invent tool calls, tests or successful changes in {}.",
             cwd, cwd
         );
 
@@ -2688,7 +2730,7 @@ impl ProviderManager {
             if provider_id == "openrouter" {
                 req = req
                     .header("HTTP-Referer", "https://quixidesk.local")
-                    .header("X-Title", "QuixiDesk");
+                    .header("X-Title", "REA Studio");
             }
             let mut msgs = vec![json!({ "role": "system", "content": sys_prompt })];
             for (role, text) in history {
@@ -2782,6 +2824,27 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn environment_credentials_preserve_precedence_and_provider_scope() {
+        let mut entry = ProviderManager::default_catalog().providers.into_iter().find(|p| p.id == "custom").unwrap();
+        entry.base_url = "https://api.deepseek.com/v1".into();
+        let lookup = |name: &str| match name { "DEEPSEEK_API_KEY" => Some(" environment-fixture ".into()), "OLLAMA_HOST" => Some("http://localhost:11434".into()), _ => None };
+        let result = ProviderManager::resolve_key_with(&entry, "", &entry.base_url, lookup);
+        assert_eq!(result, ("environment-fixture".into(), "environment".into(), Some("DEEPSEEK_API_KEY".into())));
+        assert!(entry.api_key_raw.is_empty());
+        assert!(!serde_json::to_string(&entry).unwrap().contains("environment-fixture"));
+        entry.api_key_raw = "saved-fixture".into();
+        assert_eq!(ProviderManager::resolve_key_with(&entry, "", &entry.base_url, lookup).0, "saved-fixture");
+        assert_eq!(ProviderManager::resolve_key_with(&entry, "entered-fixture", &entry.base_url, lookup).0, "entered-fixture");
+        entry.api_key_raw.clear();
+        assert!(ProviderManager::resolve_key_with(&entry, "", "https://api.deepseek.com.untrusted.invalid/v1", lookup).0.is_empty());
+        assert!(ProviderManager::resolve_key_with(&entry, "", "http://localhost:8000/v1", lookup).0.is_empty());
+        let local = ProviderManager::default_catalog().providers.into_iter().find(|p| p.id == "ollama").unwrap();
+        assert!(ProviderManager::resolve_key_with(&local, "", &local.base_url, lookup).0.is_empty());
+        assert_eq!(ProviderManager::environment_key_names(&local, &local.base_url), vec!["OLLAMA_API_KEY"]);
+        assert!(ProviderManager::resolve_key_with(&entry, "", &entry.base_url, |_| Some("  ".into())).0.is_empty());
+    }
 
     #[test]
     fn streaming_completion_rejects_http_errors_and_empty_answers() {
