@@ -392,11 +392,36 @@ fn write_file(root: &Path, body: &Value) -> Result<Value> {
     Ok(json!({"ok": true, "hash": hash(content.as_bytes())}))
 }
 
+fn analysis_material(path: &Path) -> bool {
+    let parts: Vec<_> = path
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().to_lowercase())
+        .collect();
+    parts.windows(2).any(|pair| {
+        pair[0].starts_with("quixi-reconstruction-")
+            && matches!(pair[1].as_str(), "evidence" | "manifest.json")
+    })
+}
+
+fn read_agent_file(root: &Path, path: &str, implementation: bool) -> Result<Value> {
+    let resolved = SafeFs::resolve_beneath(root, Path::new(path))?;
+    if implementation && analysis_material(&resolved) {
+        bail!("Raw analysis material is excluded from reconstruction implementation reads. Use SPEC.md and the oracle reports. Record missing requirements for a separate analysis pass; do not use shell commands to bypass this boundary.");
+    }
+    read_file(root, path)
+}
+
 fn execute(engine: &Arc<QuixiEngine>, project: &Project, run: &Run) -> Result<()> {
     let pg = &engine.playground;
     let root = Path::new(&project.path);
+    let implementation = run.prompt.starts_with("[Reconstruction implementation]\n")
+        || run.prompt.starts_with("[Reconstruction retry]\n");
     let files = FileIndexEngine::list_files(root, None, 160);
-    let names: Vec<_> = files.iter().map(|f| f.relative_path.as_str()).collect();
+    let names: Vec<_> = files
+        .iter()
+        .filter(|f| !implementation || !analysis_material(Path::new(&f.relative_path)))
+        .map(|f| f.relative_path.as_str())
+        .collect();
     pg.event(
         &run.id,
         "started",
@@ -494,7 +519,19 @@ fn execute(engine: &Arc<QuixiEngine>, project: &Project, run: &Run) -> Result<()
             "oracle" if run.mode == "code" => {
                 crate::reconstruction::run_oracles(root, field(&action, "config")?)
             }
-            "task_record" => pg.task_record(&project.id, &action),
+            "task_record" => {
+                let analysis_run = pg
+                    .runs
+                    .lock()
+                    .get(field(&action, "id")?)
+                    .map(|r| r.rea_enabled)
+                    .unwrap_or(false);
+                if implementation && analysis_run {
+                    Err(anyhow::anyhow!("Read the reviewed SPEC.md in this implementation run. Analysis task records belong to a separate analysis pass."))
+                } else {
+                    pg.task_record(&project.id, &action)
+                }
+            }
             "rea_tools" if run.rea_enabled => {
                 let tools = engine.rea.agent_tools();
                 if let Some(name) = action["tool"].as_str() {
@@ -518,19 +555,22 @@ fn execute(engine: &Arc<QuixiEngine>, project: &Project, run: &Run) -> Result<()
                     .cloned()
                     .unwrap_or_else(|| json!({})),
             ),
-            "read" => read_file(root, field(&action, "path")?).map(|mut value| {
-                let content = value["content"].as_str().unwrap_or("").to_owned();
-                let offset = action["offset"].as_u64().unwrap_or(0) as usize;
-                let limit = action["limit"].as_u64().unwrap_or(24_000).clamp(1, 24_000) as usize;
-                let total = content.chars().count();
-                value["content"] =
-                    json!(content.chars().skip(offset).take(limit).collect::<String>());
-                value["offset"] = json!(offset);
-                value["totalCharacters"] = json!(total);
-                value["partial"] = json!(offset > 0 || total > limit);
-                value["nextOffset"] = json!((offset + limit).min(total));
-                value
-            }),
+            "read" => {
+                read_agent_file(root, field(&action, "path")?, implementation).map(|mut value| {
+                    let content = value["content"].as_str().unwrap_or("").to_owned();
+                    let offset = action["offset"].as_u64().unwrap_or(0) as usize;
+                    let limit =
+                        action["limit"].as_u64().unwrap_or(24_000).clamp(1, 24_000) as usize;
+                    let total = content.chars().count();
+                    value["content"] =
+                        json!(content.chars().skip(offset).take(limit).collect::<String>());
+                    value["offset"] = json!(offset);
+                    value["totalCharacters"] = json!(total);
+                    value["partial"] = json!(offset > 0 || total > limit);
+                    value["nextOffset"] = json!((offset + limit).min(total));
+                    value
+                })
+            }
             "write" if run.mode == "code" => {
                 let _guard = pg.files.lock();
                 write_file(root, &action)
@@ -580,6 +620,31 @@ fn execute(engine: &Arc<QuixiEngine>, project: &Project, run: &Run) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn implementation_reads_specs_but_excludes_raw_dossier_material() {
+        let root = std::env::temp_dir().join(format!("quixi-handoff-{}", Uuid::new_v4()));
+        let folder = root.join("quixi-reconstruction-fixture");
+        fs::create_dir_all(folder.join("evidence")).unwrap();
+        fs::write(folder.join("SPEC.md"), "REQ-001: reviewed behaviour").unwrap();
+        fs::write(folder.join("manifest.json"), "original analysis metadata").unwrap();
+        fs::write(
+            folder.join("evidence/raw.json"),
+            "original decompiled material",
+        )
+        .unwrap();
+        assert!(read_agent_file(&root, "quixi-reconstruction-fixture/SPEC.md", true).is_ok());
+        for path in [
+            "quixi-reconstruction-fixture/manifest.json",
+            "quixi-reconstruction-fixture/evidence/raw.json",
+        ] {
+            assert!(read_agent_file(&root, path, true)
+                .unwrap_err()
+                .to_string()
+                .contains("Raw analysis material"));
+            assert!(read_agent_file(&root, path, false).is_ok());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn editor_preserves_conflicting_changes_and_rejects_escape() {
         let root = std::env::temp_dir().join(format!("quixi-editor-{}", Uuid::new_v4()));

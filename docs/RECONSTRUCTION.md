@@ -20,7 +20,7 @@ Choose the completed brief and click **Save SPEC & prepare build**. A new `quixi
 - `evidence/<record-ID>.json`: the original saved results for this artifact, including failures.
 - `README.md`: a coverage checklist.
 
-If a saved specification is selected, the build task reuses it so your edits remain intact. The prepared implementation task runs in Code mode with REA disabled. Its instructions use SPEC and project code, and send unanswered analysis questions back to a separate analysis pass. It does not automatically pass decompiled code to the implementation run. This is an information-separation workflow; Code mode still has the Windows user's permissions and is not a separate OS security boundary.
+If a saved specification is selected, the build task reuses it so your edits remain intact. The prepared implementation task runs in Code mode with REA disabled. The agent's file reader blocks raw dossier evidence and manifests in implementation/retry runs, omits them from its initial file list, and rejects analysis task-record reads. Its instructions use SPEC and project code, and send unanswered analysis questions back to a separate analysis pass. The editor remains available for your own evidence review. This is an information-separation workflow; Code mode still has the Windows user's permissions, including shell access, and is not a separate OS security boundary. A strict isolated implementation process requires a separate environment containing only the reviewed specification and implementation files.
 
 ## 3. Declare oracles
 

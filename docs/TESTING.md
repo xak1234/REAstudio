@@ -4,7 +4,7 @@ Use Windows x64 with WebView2, Git, Rust 1.98.0, and Visual Studio C++ Build Too
 
 ## Compiler, lint, and focused tests
 
-Run the validation commands from the README. The focused suites cover platform/workspace behaviour and six engine tests: write conflicts, interrupted runs, project-scoped task pagination, dossier isolation/preservation of failed records, real oracle mismatches/empty coverage/truncated output, and HTTP error/empty-stream handling. The provider regression check uses a bounded local HTTP fixture; it is not a real model test. `node scripts/check-reconstruction.cjs` checks target separation, eligible nonempty briefs, handoff and parser-error guidance.
+Run the validation commands from the README. The focused suites cover platform/workspace behaviour and seven engine tests: write conflicts, interrupted runs, project-scoped task pagination, dossier isolation/preservation of failed records, implementation reads excluding raw dossier evidence, real oracle mismatches/empty coverage/truncated output, and HTTP error/empty-stream handling. The provider regression check uses a bounded local HTTP fixture; it is not a real model test. `node scripts/check-reconstruction.cjs` checks target separation, eligible nonempty briefs, handoff and parser-error guidance.
 
 The public source audit checks tracked files for excluded runtime/profile trees, private LAN addresses, credential-bearing URLs, and common credential patterns. It does not establish that arbitrary future changes are free of secrets or licensing issues.
 
