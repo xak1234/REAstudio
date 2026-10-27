@@ -54,7 +54,12 @@ function renderProjects(){
   replace('project',[option('','Select a project'),...state.projects.map(p=>option(p.id,p.name))]);$('project').value=state.project;
   const p=state.projects.find(p=>p.id===state.project);$('project-name').textContent=p?.name || 'Your coding workspace';$('project-path').textContent=p?.path?.replace(/^\\\\\?\\/, '') || 'Open a local project to get started';
   $('project-path').title=p?.path || '';
+  renderReceivedCode();
 }
+function receivedSeen(){try{return JSON.parse(localStorage.getItem('quixi.received-seen') || '[]');}catch{return [];}}
+function pendingCode(){const seen=receivedSeen();return state.projects.filter(p=>p.received && !seen.includes(p.id)).at(-1);}
+function markReceivedSeen(id){localStorage.setItem('quixi.received-seen',JSON.stringify([...new Set([...receivedSeen(),id])]));renderReceivedCode();}
+function renderReceivedCode(){const p=pendingCode();$('received-code').hidden=!p;if(p)$('received-code-note').textContent=`Agent sent ${p.name} · ${p.received.fileCount} file(s) for ${p.received.purpose}.`;}
 function renderModels(){
   const current=$('model').value || localStorage.getItem('quixi.model') || state.providers.activeModel;
   const models=[];
@@ -79,8 +84,9 @@ function updateControls(){
   $('composer-hint').textContent=active?(active.status==='stopping'?'Stopping after the current model request or tool completes.':'Task running · actions appear in Activity'):(state.project?($('mode').value==='code'?'Code mode can edit files and run commands on this computer.':'Ask mode reads files. REA adds static analysis when enabled.'):'Open a project and choose a model.');
   $('status').textContent=active?`Run ${active.status}`:state.project?'Workspace ready':'Open a project';
   $('mode').disabled=!!active;$('model').disabled=!!active;$('rea-enabled').disabled=!!active;
+  $('received-code-open').disabled=!!active || !!state.rea.operation;
 }
-async function selectProject(id){if(!guardDirty()){$('project').value=state.project;return;}state.project=id;localStorage.setItem('quixi.project',id);state.run='';state.file=null;state.dirty=false;state.rea.oracle=null;$('reconstruction-dossier').value='';$('oracle-result').hidden=true;renderEditor();renderProjects();renderRuns();updateControls();await loadFiles();await loadDossiers();}
+async function selectProject(id){if(!guardDirty()){$('project').value=state.project;return false;}state.project=id;localStorage.setItem('quixi.project',id);state.run='';state.file=null;state.dirty=false;state.rea.oracle=null;$('reconstruction-dossier').value='';$('oracle-result').hidden=true;renderEditor();renderProjects();renderRuns();updateControls();await loadFiles();await loadDossiers();if(state.projects.find(p=>p.id===id)?.received)markReceivedSeen(id);return true;}
 async function loadFiles(){if(!state.project){replace('files',[el('p','Project files appear here.','empty')]);return;}
   const id=state.project,data=await pg('files',{query:$('filter').value});if(id!==state.project)return;state.files=data.files;state.git=data.git;renderFiles();renderGit();}
 function renderFiles(){
@@ -312,6 +318,8 @@ on('classic-configure','click',async()=>{await mcpApi('classic-configure');await
 on('classic-open','click',()=>busy($('classic-open'),async()=>{await mcpApi('classic-open');$('mcp-message').textContent='Classic opened in a separate window.';},'Opening…'));
 
 // Events
+on('received-code-open','click',async()=>{const p=pendingCode();if(!p || !await selectProject(p.id))return;if(p.received.purpose==='analysis'){await selectArtifact({path:p.received.analysisTarget});showView('analysis');}else{await openFile(p.received.entryPath);}});
+on('received-code-dismiss','click',()=>{const p=pendingCode();if(p)markReceivedSeen(p.id);});
 for(const b of document.querySelectorAll('[data-view]'))b.onclick=()=>showView(b.dataset.view);
 for(const b of document.querySelectorAll('[data-console]'))b.onclick=()=>showConsole(b.dataset.console);
 for(const b of document.querySelectorAll('[data-prompt]'))b.onclick=()=>{$('task').value=b.dataset.prompt;$('task').focus();};

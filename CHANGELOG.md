@@ -5,6 +5,7 @@ The initial Windows edition includes a reconstruction workflow for selected feat
 ## 1.1.0 — 2026-10-27
 
 - Add an opt-in, token-protected local MCP control server with connection config, request activity and immediate listener disable.
+- Agent code imports create separate projects for analysis or coding assistance, with an in-app handoff that preserves unsaved editor work.
 - Keep Classic access inside the MCP/settings menu through the earlier installed application.
 - Resolve missing provider API keys from matching environment variables for both tests and model calls, without persisting discovered secrets.
 

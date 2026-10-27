@@ -14,6 +14,7 @@ The listener binds only to `127.0.0.1`. Host and Origin headers are checked, and
 | --- | --- |
 | `studio_state` | Projects, model configuration without keys, and run summaries. |
 | `studio_open_project` | Register an existing absolute project directory. |
+| `studio_import_code` | Receive source files as a new project for code analysis or coding assistance. |
 | `studio_files`, `studio_read_file`, `studio_diff` | Actual project files, content/hash, and Git changes. |
 | `studio_write_file` | Write with the hash from a preceding read; empty hash only for a new file. |
 | `studio_command` | Execute a bounded noninteractive command in the project. |
@@ -29,7 +30,21 @@ Requests are limited to 3 MiB and four concurrent handlers. Recent tool activity
 
 ## Minimal local client check
 
-Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.1.0`, sixteen tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
+Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.1.0`, seventeen tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
+
+## Receive code from an agent
+
+A connected agent can call `studio_import_code` with a project name and text files:
+
+```json
+{"name":"My helper","purpose":"coding","files":[{"path":"src/helper.js","content":"export const double = n => n * 2;\n"}]}
+```
+
+Use `purpose: "analysis"` for the reverse engineering workspace. Optional `analysisPath` identifies an imported file or directory; otherwise the project root is the target. The result includes `project.id`, the stored file paths and `analysisTarget`. The agent can use that project with the read/write and model-task tools, or select `analysisTarget` with `studio_rea_select` and call a live static REA tool. Import itself does not execute source, install dependencies or start a model task.
+
+Each import creates a separate project under the data directory's `playground/imports`, preserving earlier projects even when names match. **Open received code** appears in the explorer. Coding imports open the first file; analysis imports select the requested target. Existing unsaved editor changes are preserved until the user explicitly switches. Imported projects remain in the project list after restart.
+
+One import accepts 1–64 UTF-8 text files, at most 2 MiB total. Paths must be relative; traversal, absolute/device paths, Git metadata and duplicate paths are rejected. Binary files and ZIP archives are not accepted by this source-code action. Continue editing through `studio_write_file` using the current file hash.
 
 ## Classic access
 

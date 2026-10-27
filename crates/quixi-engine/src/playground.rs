@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -21,6 +21,8 @@ struct Project {
     id: String,
     name: String,
     path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    received: Option<Value>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Run {
@@ -86,6 +88,61 @@ impl Playground {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Choose a project first"))
     }
+    fn import_code(&self, body: &Value) -> Result<Value> {
+        let name = field(body, "name")?.trim();
+        if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+            bail!("Use a project name of 1 to 80 characters");
+        }
+        let purpose = body["purpose"].as_str().unwrap_or("coding");
+        if !matches!(purpose, "coding" | "analysis") { bail!("Choose coding or analysis"); }
+        let files = body["files"].as_array().context("Provide source files with path and content")?;
+        if files.is_empty() || files.len() > 64 { bail!("Import between 1 and 64 text files"); }
+        let mut paths = HashSet::new();
+        let mut prepared = Vec::new();
+        let mut total = 0usize;
+        for file in files {
+            let path = import_path(field(file, "path")?)?;
+            if !paths.insert(path.to_lowercase()) { bail!("Duplicate source path: {path}"); }
+            let content = field(file, "content")?;
+            total += content.len();
+            if total > FILE_LIMIT as usize || content.contains('\0') {
+                bail!("Import at most 2 MiB of UTF-8 text without binary NUL bytes");
+            }
+            prepared.push((path, content));
+        }
+        let target = body["analysisPath"].as_str().map(import_path).transpose()?;
+        let id = Uuid::new_v4().to_string();
+        let imports = self.dir.join("imports");
+        fs::create_dir_all(&imports)?;
+        let root = imports.join(format!("received-code-{id}"));
+        fs::create_dir(&root)?;
+        let result = (|| -> Result<Value> {
+            for (path, content) in &prepared {
+                SafeFs::write_file_beneath(&root, Path::new(path), content.as_bytes())?;
+            }
+            let root = fs::canonicalize(&root)?;
+            let analysis_target = if let Some(path) = target.as_deref() {
+                let path = SafeFs::resolve_beneath(&root, Path::new(path))?;
+                if !path.exists() { bail!("analysisPath must identify an imported file or directory"); }
+                path
+            } else { root.clone() };
+            let project = Project {
+                id, name: name.to_owned(), path: root.to_string_lossy().into_owned(),
+                received: Some(json!({"purpose":purpose,"fileCount":prepared.len(),"bytes":total,
+                    "created":chrono::Utc::now().timestamp_millis(),"entryPath":prepared[0].0,
+                    "analysisTarget":analysis_target.to_string_lossy()})),
+            };
+            let mut projects = self.projects.lock();
+            let mut next = projects.clone();
+            next.push(project.clone());
+            fs::write(self.dir.join("projects.json"), serde_json::to_vec_pretty(&next)?)?;
+            *projects = next;
+            Ok(json!({"project":project,"files":prepared.iter().map(|(p,_)|p).collect::<Vec<_>>(),
+                "analysisTarget":analysis_target.to_string_lossy(),"executed":false}))
+        })();
+        if result.is_err() { let _ = fs::remove_dir_all(&root); }
+        result
+    }
     fn persist_run(&self, run: &Run) {
         if let Err(error) = fs::write(
             self.dir.join("runs").join(format!("{}.json", run.id)),
@@ -150,6 +207,7 @@ impl Playground {
         if method != "POST" {
             bail!("This operation requires POST");
         }
+        if route == "import" { return pg.import_code(body); }
         if let Some(operation) = route.strip_prefix("rea/") {
             return crate::analysis::AnalysisWorkspace::handle(engine, operation, body);
         }
@@ -193,6 +251,7 @@ impl Playground {
                     .to_string_lossy()
                     .into_owned(),
                 path: path.to_string_lossy().into_owned(),
+                received: None,
             };
             projects.push(project.clone());
             fs::write(
@@ -356,6 +415,20 @@ fn field<'a>(body: &'a Value, name: &str) -> Result<&'a str> {
     body.get(name)
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("Missing {name}"))
+}
+fn import_path(path: &str) -> Result<String> {
+    let path = path.replace('\\', "/");
+    if path.is_empty() || path.len() > 240 { bail!("Use a relative source path of 1 to 240 bytes"); }
+    for part in path.split('/') {
+        let stem = part.split('.').next().unwrap_or("").to_ascii_uppercase();
+        if part.is_empty() || matches!(part, "." | "..") || part.eq_ignore_ascii_case(".git")
+            || part.ends_with(['.', ' ']) || part.chars().any(|c| c.is_control() || ":<>\"|?*".contains(c))
+            || matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+            || ((stem.starts_with("COM") || stem.starts_with("LPT")) && matches!(stem.get(3..), Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))) {
+            bail!("Unsafe source path: {path}");
+        }
+    }
+    Ok(path)
 }
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -620,6 +693,29 @@ fn execute(engine: &Arc<QuixiEngine>, project: &Project, run: &Run) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn imported_code_is_isolated_persisted_and_rejects_unsafe_bundles() {
+        let root = std::env::temp_dir().join(format!("rea-import-{}", Uuid::new_v4()));
+        let pg = Playground::new(&root);
+        let body = json!({"name":"Incoming project","purpose":"analysis","analysisPath":"src",
+            "files":[{"path":"src/main.js","content":"export const answer = 42;\n"},{"path":"README.md","content":"Received source"}]});
+        let first = pg.import_code(&body).unwrap();
+        let second = pg.import_code(&body).unwrap();
+        assert_ne!(first["project"]["path"], second["project"]["path"]);
+        let project_root = Path::new(first["project"]["path"].as_str().unwrap());
+        assert_eq!(fs::read_to_string(project_root.join("src/main.js")).unwrap(), "export const answer = 42;\n");
+        assert_eq!(Playground::new(&root).projects.lock().len(), 2);
+        assert_eq!(first["executed"], false);
+        for path in ["../escape.js", "C:/escape.js", "/escape.js", "src/../../escape.js", "NUL.txt", "COM¹.txt", "a.js:stream", ".git/config"] {
+            assert!(pg.import_code(&json!({"name":"Bad","files":[{"path":path,"content":"text"}]})).is_err());
+        }
+        assert!(pg.import_code(&json!({"name":"Bad","files":[{"path":"A.js","content":"a"},{"path":"a.js","content":"b"}]})).is_err());
+        assert!(pg.import_code(&json!({"name":"Bad","files":[{"path":"src","content":"a"},{"path":"src/main.js","content":"b"}]})).is_err());
+        assert!(pg.import_code(&json!({"name":"Bad","files":[{"path":"a.js","content":"a"}],"analysisPath":"missing.js"})).is_err());
+        assert_eq!(pg.projects.lock().len(), 2);
+        assert_eq!(fs::read_dir(pg.dir.join("imports")).unwrap().count(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn implementation_reads_specs_but_excludes_raw_dossier_material() {
         let root = std::env::temp_dir().join(format!("quixi-handoff-{}", Uuid::new_v4()));

@@ -26,6 +26,7 @@
   <aside class="explorer" id="explorer" aria-label="Project explorer">
     <div class="pane-heading"><span>EXPLORER</span><button id="refresh" class="icon" title="Refresh files" aria-label="Refresh files">↻</button></div>
     <label class="sr-only" for="project">Project</label><select id="project"><option value="">Select a project</option></select>
+    <div id="received-code" class="received-code" role="status" hidden><p id="received-code-note"></p><button id="received-code-open" class="small">Open received code</button><button id="received-code-dismiss" class="icon" aria-label="Dismiss received code notification">×</button></div>
     <div class="file-toolbar"><input id="filter" type="search" placeholder="Find a file…" aria-label="Find a file"><button id="new-file" class="icon" title="Create file" aria-label="Create file">＋</button></div>
     <div id="files" class="file-list"><p class="empty">Project files appear here.</p></div>
     <div class="pane-heading history-heading"><span>RUN HISTORY</span><span id="run-count" class="count">0</span></div>

@@ -2,6 +2,7 @@ REA Studio V1.1 (1.1.0) continues the QuixiDesk Windows coding and reverse engin
 
 - New REA Studio branding, REAStudio.exe, installer and portable package; existing settings, runs and evidence remain compatible.
 - Optional token-protected local MCP server with enable/disable controls, connection config and actual agent activity.
+- Agent code imports create separate projects for analysis or coding assistance, with an in-app handoff that preserves unsaved editor work.
 - Classic launcher tucked inside MCP & Settings, using the earlier installed application.
 - Missing API keys resolved from matching provider environment variables without persisting discovered secrets.
 - Guided function and string inputs prevent empty requests. Advanced JSON stays available and survives catalog refreshes.

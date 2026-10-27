@@ -503,6 +503,7 @@ fn tool_catalog() -> Vec<Value> {
     vec![
         tool("studio_state","List projects, configured model IDs and task summaries (no credentials).",json!({}),&[],true),
         tool("studio_open_project","Open an existing absolute project directory; returns its project ID.",json!({"path":string}),&["path"],false),
+        tool("studio_import_code","Push UTF-8 source files into a new REA Studio project for the user. Returns project ID and analysisTarget. Import never executes code. Use studio_rea_select and static REA tools to analyse the returned target, or studio_start_run for coding assistance.",json!({"name":{"type":"string","minLength":1,"maxLength":80},"purpose":{"type":"string","enum":["coding","analysis"]},"analysisPath":{"type":"string","description":"Optional imported file/directory relative to the new project; defaults to its root."},"files":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}}),&["name","files"],false),
         tool("studio_files","List project files, optionally filtered by query.",json!({"project":string,"query":string}),&["project"],true),
         tool("studio_read_file","Read a project-relative UTF-8 file and its conflict-detection hash.",json!({"project":string,"path":string}),&["project","path"],true),
         tool("studio_write_file","Write a project file using the hash returned by read; use empty hash only for new files.",json!({"project":string,"path":string,"content":string,"hash":string}),&["project","path","content","hash"],false),
@@ -538,6 +539,7 @@ fn validate_arguments(schema: &Value, args: &Value) -> Result<()> {
             Some("string") => value.is_string(),
             Some("boolean") => value.is_boolean(),
             Some("object") => value.is_object(),
+            Some("array") => value.is_array(),
             _ => false,
         };
         if !valid {
@@ -621,6 +623,7 @@ fn dispatch_tool(engine: &Arc<QuixiEngine>, name: &str, args: &Value) -> Result<
             "project"
         }
         "studio_files" => "files",
+        "studio_import_code" => "import",
         "studio_read_file" => "read",
         "studio_write_file" => "write",
         "studio_diff" => "diff",
