@@ -74,7 +74,8 @@ try {
     $manifest | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $output 'SHA256SUMS.json') -Encoding utf8
     if (!$NoZip) {
         Write-Host 'Compressing the portable release...'
-        & tar.exe -a -c -f "$output.zip" -C (Split-Path $output) $name
+        # Windows bsdtar: Git's GNU tar on PATH treats "E:" in the archive path as a remote host.
+        & (Join-Path $env:SystemRoot 'System32\tar.exe') -a -c -f "$output.zip" -C (Split-Path $output) $name
         if ($LASTEXITCODE -ne 0) { throw 'Archive creation failed.' }
         $hash = (Get-FileHash -LiteralPath "$output.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $name.zip" | Set-Content "$output.zip.sha256" -Encoding ascii
