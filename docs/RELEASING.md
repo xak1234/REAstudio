@@ -4,15 +4,15 @@ The source repository and portable application are separate artifacts. Keep runt
 
 ## Maintainer procedure
 
-1. Update the workspace version in Cargo.toml and regenerate Cargo.lock. Update CHANGELOG.md and the README's versioned download name. Keep `rust-toolchain.toml`, REA's package.json/package-lock.json, plugin.json, and runtime checksums consistent when changing dependencies.
+1. Every delivered update needs a new version, including fixes and documentation corrections. Run `node scripts/bump-version.mjs patch`, or choose `minor`/`major` for the corresponding release. The helper updates Cargo.toml, workspace entries in Cargo.lock and current download/documentation references. Add the new CHANGELOG.md entry and matching release notes, then run `node scripts/check-version.mjs`. CI rejects a main-branch or pull-request update whose version has not increased. Window, HTML and MCP labels come from the compiled package version. Keep `rust-toolchain.toml`, REA's package.json/package-lock.json, plugin.json, and runtime checksums consistent when changing dependencies.
 2. Run the public audit, JavaScript syntax checks, Rust check/Clippy, and focused tests from README.md. Run the native UI/Ghidra check from TESTING.md on an interactive Windows account.
 3. Build the package with `scripts/package-windows.ps1`. Review BUILD-INFO.json, SHA256SUMS.json, the generated dependency inventories, preserved licenses, and corresponding source archives. Verify the ZIP and test its extracted copy.
 4. Commit the reviewed source to `main`. Create and push a matching annotated tag:
 
    ```powershell
-   git tag -a v1.1.0 -m 'REA Studio 1.1.0'
+   git tag -a v1.1.1 -m 'REA Studio 1.1.1'
    git push origin main
-   git push origin v1.1.0
+   git push origin v1.1.1
    ```
 
 5. The Windows workflow rebuilds and tests the tagged source, uploads its artifacts, and creates a **draft** GitHub Release with the ZIP and `.sha256` sidecar. Review its notes and assets, then publish the draft. This is not a GitHub Pages deployment.
@@ -24,12 +24,12 @@ Do not reuse a published tag or overwrite a published archive. Fixes should rece
 If publishing a locally verified build rather than the workflow artifact, authenticate GitHub CLI normally and use:
 
 ```powershell
-gh release create v1.1.0 `
-  .\dist\REA-Studio-1.1.0-x64.zip `
-  .\dist\REA-Studio-1.1.0-x64.zip.sha256 `
+gh release create v1.1.1 `
+  .\dist\REA-Studio-1.1.1-x64.zip `
+  .\dist\REA-Studio-1.1.1-x64.zip.sha256 `
   --repo xak1234/REAstudio `
-  --verify-tag --draft --title 'REA Studio 1.1.0' `
-  --notes-file .\docs\release-notes-1.1.0.md
+  --verify-tag --draft --title 'REA Studio 1.1.1' `
+  --notes-file .\docs\release-notes-1.1.1.md
 ```
 
 Use the exact source commit recorded in the package's BUILD-INFO.json. Review and publish the draft using GitHub's Releases interface. No personal access token belongs in the repository or in a command copied into the README.

@@ -2,7 +2,14 @@
 
 The initial Windows edition includes a reconstruction workflow for selected features or staged application rebuilds, saved task handoff, evidence dossier export, and actionable guidance for PE resource ranges that are not file-backed.
 
-## Analysis integrations (V1.1 update)
+## 1.1.1 — 2026-10-28
+
+- Give the current release an exact, distinct version in the window, HTML interface, MCP identity, README and package metadata.
+- Require a version increase for every delivered update, with a version-bump helper, release consistency checks and a CI gate against the previous main/base commit.
+- Verify native-provider connection status from successful analysis evidence; opening a file alone does not turn its indicator green. Failed checks and target changes clear the indicator.
+- Add a live attached-IDA check covering function listings, two decompilations, assembly, saved evidence and target identity rejection.
+
+### Analysis integrations carried forward from V1.1
 
 - Added detected analysis-source selection and green live connection indicators.
 - Integrated optional x64dbg Automate MCP with explicit sessions, bounded observations/controls and durable runtime evidence.

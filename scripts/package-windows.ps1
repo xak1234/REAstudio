@@ -26,6 +26,13 @@ try {
     if ($reaVersion -ne '6.8.0') { throw 'Expected REA 6.8.0. Re-run dependency preparation in a clean checkout.' }
     $nodeVersion = & (Join-Path $runtime 'node\node.exe') --version
     if ($nodeVersion -ne 'v24.22.1') { throw 'Bundled Node version does not match the release.' }
+    & (Join-Path $runtime 'node\node.exe') (Join-Path $repo 'scripts\check-version.mjs')
+    if ($LASTEXITCODE -ne 0) { throw 'Release version checks failed.' }
+    if (Test-Path (Join-Path $repo '.git')) {
+        $changes = & git status --porcelain --untracked-files=normal
+        if ($LASTEXITCODE -ne 0) { throw 'Could not verify the source checkout.' }
+        if ($changes) { throw 'Commit the release source before packaging so BUILD-INFO identifies the actual source.' }
+    }
     if (!(Select-String -LiteralPath (Join-Path $runtime 'ghidra\Ghidra\application.properties') -Pattern '^application.version=12\.1\.4$' -Quiet)) { throw 'Unexpected Ghidra version.' }
     if (!(Select-String -LiteralPath (Join-Path $runtime 'jdk\release') -Pattern '^JAVA_VERSION="21\.0\.12\.1"$' -Quiet)) { throw 'Unexpected Temurin version.' }
     $version = ((Select-String -LiteralPath Cargo.toml -Pattern '^version = "([^"]+)"$' | Select-Object -First 1).Matches[0].Groups[1].Value)

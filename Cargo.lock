@@ -3182,7 +3182,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-app"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "block",
@@ -3213,7 +3213,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-chrome-native-host"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "quixi-mcp",
@@ -3224,7 +3224,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-disclaimer"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "quixi-platform",
@@ -3232,7 +3232,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-engine"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3256,7 +3256,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-guest-daemon"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -3267,7 +3267,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-ipc"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3286,7 +3286,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-mcp"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3300,7 +3300,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-mcp-builtin"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "quixi-mcp",
@@ -3311,7 +3311,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-netstack"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3323,7 +3323,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-platform"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3343,7 +3343,7 @@ dependencies = [
 
 [[package]]
 name = "quixi-proto"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "chrono",
  "serde",
@@ -3353,14 +3353,14 @@ dependencies = [
 
 [[package]]
 name = "quixi-ssh-askpass"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "quixi-workspace"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "dashmap",

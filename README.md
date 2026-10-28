@@ -1,7 +1,7 @@
 <div align="center">
 <img src="resources/rea-logo.svg" alt="REA Studio" width="220">
 
-# REA Studio V1.1
+# REA Studio V1.1.1
 
 **A native coding playground with an integrated REA reverse engineering workspace.**
 
@@ -10,7 +10,7 @@
 
 REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. Its dark playground layout keeps the project on the left, work in the centre, and model/tool settings on the right.
 
-**V1.1 (package version 1.1.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
+**V1.1.1 (package version 1.1.1).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
 
 This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/QuixiAI/QuixiDesk), with a separately implemented playground UI and the upstream MIT attribution preserved. It is an independent community project. It does not include the upstream Classic renderer, extracted application assets, proprietary fonts, example account data, or local machine configuration. See [NOTICE.md](NOTICE.md) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled components.
 
@@ -47,11 +47,11 @@ No global Node, Java, Ghidra, npm, Rust, or administrator installation is needed
 
 ## Install and run
 
-1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.1.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
+1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.1.1-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
 2. Verify the ZIP in PowerShell:
 
    ```powershell
-   $archive = '.\REA-Studio-1.1.0-x64.zip'
+   $archive = '.\REA-Studio-1.1.1-x64.zip'
    $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
    $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
    if ($actual -ne $expected) { throw 'Checksum mismatch: download the release again.' }

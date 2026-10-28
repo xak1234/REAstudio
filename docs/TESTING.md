@@ -34,7 +34,7 @@ Expected output ends with a JSON object containing `passed: true`, real tool/cat
 1. Edits the fixture README through the WebView and verifies the physical file.
 2. Simulates an external writer and verifies that a stale-hash save is rejected.
 3. Reads a real Git diff and executes PowerShell.
-4. Verifies REA Studio V1.1 branding, prevents empty Strings/Decompile requests, preserves arguments across refresh, pages real functions and decompiles a selected row. Connects bundled REA, opens the compiled fixture, analyses `quixi_add`, and requests decompiled code in the same persistent MCP session.
+4. Verifies REA Studio branding and the exact current package version, prevents empty Strings/Decompile requests, preserves arguments across refresh, pages real functions and decompiles a selected row. Connects bundled REA, opens the compiled fixture, analyses `quixi_add`, and requests decompiled code in the same persistent MCP session.
 5. Inspects the JavaScript fixture and reads the persisted evidence record back.
 6. Captures screenshots into the fixture directory and closes the active REA target.
 7. Opens Toolchain, reads the packaged workflow, prepares a SPEC task, and exports actual evidence into a separate rebuild project.

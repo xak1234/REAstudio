@@ -20,6 +20,12 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Verify release version and require an increase
+        env:
+          REA_VERSION_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.ref == 'refs/heads/main' && github.event.before || '') }}
+        run: node scripts/check-version.mjs
       - name: Prepare the pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component clippy --component rustfmt
       - name: Audit public source and JavaScript syntax
@@ -58,7 +64,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --release -p quixi-engine providers::tests --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release -p quixi-app mcp_server::tests --locked
+          cargo test --release -p quixi-app --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build the complete release archive
         if: github.event_name != 'pull_request'

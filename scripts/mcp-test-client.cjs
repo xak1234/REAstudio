@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict');
 const path=require('node:path');
 const net=require('node:net');
+const {version}=require('./version.cjs');
 module.exports=async function connectAppMcp(page){
   const sdk=process.env.REA_STUDIO_TEST_SDK;
   assert(sdk,'Set REA_STUDIO_TEST_SDK to the official MCP SDK package directory');
@@ -15,7 +16,7 @@ module.exports=async function connectAppMcp(page){
   const probe=net.createServer();
   const port=await new Promise((resolve,reject)=>{probe.once('error',reject);probe.listen(0,'127.0.0.1',()=>resolve(probe.address().port));});
   await new Promise(resolve=>probe.close(resolve));
-  const client=new Client({name:'rea-studio-live-integration-check',version:'1.1.0'});
+  const client=new Client({name:'rea-studio-live-integration-check',version});
   try{
     await native('enable',{port});
     const config=(await native('config')).mcpServers['rea-studio'];

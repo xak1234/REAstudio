@@ -3,6 +3,7 @@
 const { chromium } = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwright-core');
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
+const {version} = require('./version.cjs');
 (async()=>{
   const browser=await chromium.connectOverCDP(process.env.REA_STUDIO_TEST_CDP || 'http://127.0.0.1:9322');
   const page=browser.contexts()[0].pages().find(p=>p.url().includes('app.localhost/playground'));
@@ -40,7 +41,7 @@ const assert = require('node:assert/strict');
   await page.locator('[data-rea-tool=open_binary]').click();await page.locator('#rea-run').click();
   await page.waitForFunction(()=>document.getElementById('rea-run').textContent.includes('Run analysis') && !document.getElementById('rea-run').disabled,{},{timeout:90000});
   assert.match(await page.locator('#evidence-summary').textContent(),/Analysis saved/);
-  assert.match(await page.title(),/REA Studio V1.1/);
+  assert.equal(await page.title(),`REA Studio V${version} · Coding & Reverse Engineering`);
   await page.locator('[data-rea-tool=search_strings]').click();
   assert.equal(await page.locator('#rea-run').isDisabled(),true);
   assert.match(await page.locator('#rea-validation').textContent(),/enter text/);

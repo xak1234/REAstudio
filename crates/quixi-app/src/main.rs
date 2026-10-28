@@ -58,7 +58,16 @@ fn static_asset(root: &Path, path: &str) -> Response<Cow<'static, [u8]>> {
         _ => return response(404, "text/plain", b"Not found".to_vec()),
     };
     match fs::read(root.join(file)) {
-        Ok(bytes) => response(200, mime, bytes),
+        Ok(bytes) => {
+            let bytes = if file == "playground/index.html" {
+                String::from_utf8_lossy(&bytes)
+                    .replace("__REA_STUDIO_VERSION__", env!("CARGO_PKG_VERSION"))
+                    .into_bytes()
+            } else {
+                bytes
+            };
+            response(200, mime, bytes)
+        }
         Err(_) => response(
             500,
             "text/plain",
@@ -96,7 +105,10 @@ fn main() -> anyhow::Result<()> {
     let api_mcp = Arc::clone(&mcp);
     let event_loop = EventLoopBuilder::<()>::new().build();
     let window = WindowBuilder::new()
-        .with_title("REA Studio V1.1 · Coding & Reverse Engineering")
+        .with_title(format!(
+            "REA Studio V{} · Coding & Reverse Engineering",
+            env!("CARGO_PKG_VERSION")
+        ))
         .with_inner_size(LogicalSize::new(1440.0, 920.0))
         .with_min_inner_size(LogicalSize::new(480.0, 360.0))
         .with_visible(false)
@@ -209,4 +221,22 @@ fn main() -> anyhow::Result<()> {
             *control_flow = ControlFlow::Exit;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn served_html_uses_the_compiled_release_version() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources");
+        let result = static_asset(&root, "/playground");
+        assert_eq!(result.status(), 200);
+        let html = std::str::from_utf8(result.body().as_ref()).unwrap();
+        assert!(html.contains(&format!(
+            "<title>REA Studio V{} · Coding & Reverse Engineering</title>",
+            env!("CARGO_PKG_VERSION")
+        )));
+        assert!(!html.contains("__REA_STUDIO_VERSION__"));
+    }
 }
