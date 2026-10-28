@@ -21,7 +21,7 @@ module.exports=async function connectAppMcp(page){
     await native('enable',{port});
     const config=(await native('config')).mcpServers['rea-studio'];
     await client.connect(new StreamableHTTPClientTransport(new URL(config.url),{requestInit:{headers:config.headers}}));
-    assert.equal((await client.listTools()).tools.length,27);
+    assert.equal((await client.listTools()).tools.length,28);
     return {
       client,
       call:async(name,args={})=>{

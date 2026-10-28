@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "description": "Source-known /O2 C++ EXE + DLL. Export names are intentional anchors; no PDB is emitted. Static checks do not prove whole-application or runtime equivalence.",
+  "modules": [
+    {
+      "file": "rea-fixture-core.dll",
+      "functions": [
+        "rea_price",
+        "rea_band",
+        "rea_emit_invoice"
+      ],
+      "decompile": [
+        {
+          "name": "rea_price",
+          "allPatterns": [
+            "125|0x7[dD]",
+            "10000|0x2710",
+            "return"
+          ]
+        },
+        {
+          "name": "rea_band",
+          "allPatterns": [
+            "INVALID",
+            "BULK",
+            "STANDARD"
+          ]
+        },
+        {
+          "name": "rea_emit_invoice",
+          "allPatterns": [
+            "rea_price",
+            "rea_band",
+            "REA-INVOICE-V1",
+            "\"wb\"",
+            "return\\s+3",
+            "return\\s+4"
+          ],
+          "fileHandleFlow": true
+        }
+      ],
+      "xrefs": [
+        {
+          "callee": "rea_price",
+          "caller": "rea_emit_invoice"
+        },
+        {
+          "callee": "rea_band",
+          "caller": "rea_emit_invoice"
+        }
+      ]
+    },
+    {
+      "file": "rea-complex-fixture.exe",
+      "functions": [
+        "rea_parse_quantity"
+      ],
+      "decompile": [
+        {
+          "name": "rea_parse_quantity",
+          "allPatterns": [
+            "10000|0x2710",
+            "return"
+          ]
+        }
+      ],
+      "imports": [
+        "rea_price",
+        "rea_band",
+        "rea_emit_invoice"
+      ],
+      "xrefs": [
+        {
+          "callee": "rea_parse_quantity"
+        }
+      ]
+    }
+  ],
+  "runtimeCases": [
+    {
+      "args": [
+        "price",
+        "12",
+        "1"
+      ],
+      "exitCode": 0,
+      "stdout": "total=1200\r\nband=BULK\r\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "price",
+        "2",
+        "0"
+      ],
+      "exitCode": 0,
+      "stdout": "total=250\r\nband=STANDARD\r\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "price",
+        "3",
+        "2"
+      ],
+      "exitCode": 0,
+      "stdout": "total=243\r\nband=STANDARD\r\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "price",
+        "oops",
+        "0"
+      ],
+      "exitCode": 2,
+      "stdout": "",
+      "stderr": "invalid input\r\n"
+    },
+    {
+      "args": [
+        "price",
+        "10001",
+        "0"
+      ],
+      "exitCode": 2,
+      "stdout": "",
+      "stderr": "invalid input\r\n"
+    }
+  ],
+  "invoiceCase": {
+    "args": [
+      "invoice",
+      "12",
+      "1"
+    ],
+    "exitCode": 0,
+    "stdout": "invoice written\r\n",
+    "stderr": "",
+    "fileContent": "REA-INVOICE-V1\nquantity=12\ntier=1\ntotal=1200\nband=BULK\n"
+  }
+}

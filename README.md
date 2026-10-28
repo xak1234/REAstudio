@@ -1,16 +1,16 @@
 <div align="center">
 <img src="resources/rea-logo.svg" alt="REA Studio" width="220">
 
-# REA Studio V1.2.0
+# REA Studio V1.4.0
 
 **A native coding playground with an integrated REA reverse engineering workspace.**
 
 [Download Windows release](https://github.com/xak1234/REAstudio/releases) · [Build from source](#build-from-source) · [REA workflow](#reverse-engineering-with-rea) · [Troubleshooting](#troubleshooting)
 </div>
 
-REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. Its dark playground layout keeps the project on the left, work in the centre, and model/tool settings on the right.
+REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. The workspace keeps the project, editor, evidence and task settings together, with collapsible side panels to give the current work more room.
 
-**V1.2.0 (package version 1.2.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
+**V1.4.0 (package version 1.4.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
 
 This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/QuixiAI/QuixiDesk), with a separately implemented playground UI and the upstream MIT attribution preserved. It is an independent community project. It does not include the upstream Classic renderer, extracted application assets, proprietary fonts, example account data, or local machine configuration. See [NOTICE.md](NOTICE.md) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled components.
 
@@ -26,6 +26,7 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 | Ask mode | Read project files and answer questions; optional static REA tools can inspect a selected artifact. |
 | Code mode | Read/write files and run commands as the signed-in Windows user. |
 | REA plugin | Persistent MCP connection, live tool schemas and availability, artifact selection, recovered code, and saved JSON evidence. |
+| Investigations | Named immutable snapshots of related files, per-module identity/evidence status, staged evidence bundles and desktop/MCP access. |
 | Reconstruction | Binary → REA → SPEC.md → rebuild → oracle → retry, with separate implementation runs and persisted evidence/comparison reports. |
 | Analysis sources | Installed-tool selector, green live connection indicators, REA providers (Ghidra, IDA attached or headless), x64dbg observations, and imported reports. |
 | IDA Pro bridge | Headless (idalib) or attached IDA with live tools, Hex-Rays pseudocode, xrefs/call graphs, persistent renames/comments/types in a private IDB, evidence records, and agent/MCP access. |
@@ -36,6 +37,33 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 | Providers | API-key providers and local/custom OpenAI-compatible endpoints; model selection and connection testing. |
 
 This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY (commands cannot read keyboard input), a full debugger UI, Git branch/push/pull operations, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
+
+### A less crowded workspace
+
+Use **Files** and **Task settings** to hide either sidebar and give the editor or evidence more room. Desktop panel choices are remembered. At narrow window sizes the panels open over the workspace; **Escape** dismisses them. The task bar keeps the selected Agent model and access mode visible and provides a shortcut back to task settings.
+
+The reverse engineering page has shortcuts to **Analyze**, **Saved evidence**, **Investigations**, **Rebuild** and **Advanced tools**. They move to sections of the same page, so changing sections keeps the selected target, evidence and drafted arguments.
+
+Start with the artifact picker, common analysis actions and guided inputs. For full technical access, use **Find a tool** and **Tool** in Analyze to browse the live catalog; open **Advanced tools** for optional bridges and runtime controls. **Expert view** exposes exact arguments and schemas; **Advanced arguments & schema** and the other individual disclosure sections remain available even when Expert view is off. Tools that need additional arguments, or invalid JSON that needs correction, reveal the relevant controls. Manual tools, saved raw responses, provider configuration, IDA/x64dbg controls, evidence export and reconstruction checks remain available.
+
+### Multi-artifact investigations and close protection in V1.4
+
+Use **Investigations** in the reverse engineering panel to collect related EXE, DLL or other local files under a named snapshot. Add the selected artifact or use **Add analysed files**, review the list, and capture immutable SHA-256 identities. **Check files** shows each file's current, changed, missing or unavailable state and its saved evidence counts. New builds need a new snapshot; existing snapshots remain available.
+
+Export a version-pinned evidence bundle into a separate project. Its manifest includes original saved records, record hashes, exclusion reasons, failed observations, unverified model suggestions and modules without matching evidence. Every input is rechecked before the staged directory becomes final. No target is executed or copied, and explicit size/count limits prevent partial coverage from being silently presented as complete. The existing single-artifact dossier and reconstruction flow remains available. See [Investigations](docs/INVESTIGATIONS.md) for storage, bounds and bundle semantics; [MCP control](docs/MCP.md) documents the same workflow through `studio_investigation`.
+
+Closing the native window now offers **Keep working**, **Save & close**, or **Close without saving** when the editor has unsaved work. A save conflict keeps the editor open. Active tasks, commands and analysis are disclosed even when they started through backend APIs. If the interface cannot respond, a native confirmation defaults to keeping the app open.
+
+### Investigation controls in V1.3
+
+Analysis resources and runtime identity shows the connected server separately from the bundled component versions. Set Ghidra heap, startup and call limits there, then Save & reconnect. Use Bundled REA for the release-pinned stack; an existing external wrapper may run another version.
+
+File evidence is pinned to the artifact's SHA-256. Artifact versions groups saved results by path and content hash. Dossier export excludes different builds and legacy records without verified identity, records why, and preserves the originals. Directory evidence stays explicitly unverified. Completed analysis briefs must match the current binary before automatic build handoff.
+
+Connections includes Server context capacity: use your server's actual configured token limit. The agent reserves output space, budgets input conservatively, and retains bounded checkpoint notes across interruptions; continuing starts a new task and never automatically repeats pending commands.
+
+Oracle cases can compare files by existence, exact text, SHA-256 or structural JSON as well as process outputs. Review the displayed assertions, approve the exact suite, and use Stop checks to cancel its owned processes. These are declared behavioural checks; application-wide coverage still requires a reviewed test plan.
+
 
 ## Requirements
 
@@ -50,11 +78,11 @@ No global Node, Java, Ghidra, npm, Rust, or administrator installation is needed
 
 ## Install and run
 
-1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.2.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
+1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.4.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
 2. Verify the ZIP in PowerShell:
 
    ```powershell
-   $archive = '.\REA-Studio-1.2.0-x64.zip'
+   $archive = '.\REA-Studio-1.4.0-x64.zip'
    $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
    $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
    if ($actual -ne $expected) { throw 'Checksum mismatch: download the release again.' }
@@ -70,9 +98,9 @@ The application and installer are unsigned. The installer refuses to overwrite a
 ## First project and provider
 
 1. Click **Open project** and choose a folder you own or are working on.
-2. Click **Providers** and select the appropriate provider. For a local model server choose **Custom OpenAI-Compatible**.
+2. Click **Connections** and select the appropriate provider. For a local model server choose **Custom OpenAI-Compatible**.
 3. Enter its base URL, including `/v1` when required, and its exact model ID. Supply an API key only when the endpoint requires one.
-4. Click **Test connection**, then **Save provider**. Select the model in the right sidebar.
+4. Click **Test connection**, then **Save provider**. Select the Agent model in **Task settings**.
 5. Start with **Ask · read files**. Switch to **Code · edit & run commands** when you want the agent to make changes.
 
 Examples of local endpoint shapes:
@@ -139,15 +167,15 @@ Opening a project runs Git only when the repository's own config defines no comm
 | Ghidra | 12.1.4 | Native import, function analysis, and decompilation |
 | Eclipse Temurin JDK | 21.0.12.1+1 | Runs Ghidra and its Java tooling |
 
-The plugin receives its own `JAVA_HOME`, `GHIDRA_INSTALL_DIR`, and `PATH`. It does not alter system Java, install global npm packages, or register itself in other MCP clients. Ghidra's headless heap limit is 1536 MiB; total application and analysis memory can be higher.
+The plugin receives its own `JAVA_HOME`, `GHIDRA_INSTALL_DIR`, and `PATH`. It does not alter system Java, install global npm packages, or register itself in other MCP clients. Ghidra's default headless heap is 4096 MiB and is configurable in Analysis resources; total application and analysis memory can be higher.
 
 ### Typical workflow
 
 1. Open **Reverse engineering** and click **Connect REA**.
 2. Choose an EXE/DLL or a JavaScript application folder with **File…** or **Folder…**. Use a file/folder you are authorised to analyse.
-3. Use a quick action such as **Open native target**, **Imports**, **PE resources**, **.NET metadata**, or **JavaScript / Electron**. Review the real advertised JSON input schema and arguments, then click **Run analysis**. **Open native target** starts Ghidra in the background; it does not open a separate Ghidra desktop window.
+3. Use a quick action such as **Open native target**, **Imports**, **PE resources**, **.NET metadata**, or **JavaScript / Electron**. Review the guided inputs, or expand the exact JSON arguments and live schema, then click **Run analysis**. **Open native target** starts Ghidra in the background; it does not open a separate Ghidra desktop window.
 4. For native work, open the binary and click **Functions**, then **Run analysis**. A paged table shows actual retained functions; click **Decompile** beside a local function to retrieve its code. External imports are labelled separately. **Strings** provides a search field and rejects empty input before calling REA. Guided fields and the advanced JSON editor stay in sync; refreshing the catalog preserves your arguments. A successful `open_binary` call alone does not prove that deeper native analysis succeeded.
-5. Read **Evidence & recovered code**, including limitations. **Complete result** contains the entire retained MCP response. For large live views, use `inspect_analysis_view` with the returned reference to retrieve additional pages.
+5. Choose **Saved evidence** and read **Evidence & recovered code**, including limitations. **Complete result** contains the entire retained MCP response. For large live views, use `inspect_analysis_view` with the returned reference to retrieve additional pages.
 6. Use **Use in task** to supply a saved analysis record to the coding agent. **Enable analysis tools for this task** grants the agent the static-analysis subset, saved records, and the separately enabled debugger/specialist integrations. Ask mode reads debugger observations; Code mode also permits its bounded execution controls.
 7. **Export JSON** writes a saved result to a selected folder. **Close target** releases the current live target.
 
@@ -230,7 +258,7 @@ To produce a complete distributable:
 
 The script builds the locked workspace, obtains pinned/checksummed runtimes, installs REA with the npm lockfile, copies only the public application resources, collects dependency notices and corresponding source, generates a file hash manifest, and creates the versioned ZIP and SHA-256 sidecar in `dist`.
 
-`-SkipBuild -SkipDependencyDownload` packages an already prepared checkout. `-NoZip` leaves only the staged folder. `-BuildOutput` can point at a separate Cargo release output folder. Existing output directories are not overwritten. The prepare script restores its process PATH and does not change system environment variables.
+`-SkipBuild -SkipDependencyDownload` packages an already prepared checkout. `-NoZip` leaves only the staged folder. `-BuildOutput` can point at a separate Cargo release output folder. `-OutputRoot` can place the staged release and ZIP on another drive (the default is `dist`). Existing output directories are not overwritten. The prepare script restores its process PATH and does not change system environment variables.
 
 ### Validate changes
 
@@ -245,9 +273,10 @@ cargo test --release -p quixi-platform --locked
 cargo test --release -p quixi-workspace --locked
 cargo test --release -p quixi-engine playground::tests --locked
 cargo test --release -p quixi-engine analysis::tests --locked
+cargo test --release -p quixi-engine analysis::investigations::tests --locked
 cargo test --release -p quixi-engine reconstruction::tests --locked
 cargo test --release -p quixi-engine providers::tests --locked
-cargo test --release -p quixi-app mcp_server::tests --locked
+cargo test --release -p quixi-app --locked
 ```
 
 Clippy warnings inherited from shared upstream modules may remain; a successful check is not a claim that all upstream warnings were removed. The entire legacy test suite is not used as a Windows compatibility claim.

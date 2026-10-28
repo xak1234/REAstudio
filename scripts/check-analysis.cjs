@@ -147,6 +147,30 @@ const changed = oraclePlan({sha256:sha,approved:true,approvedSha256:'b'.repeat(6
 assert.equal(changed.approved, false); assert.equal(changed.changed, true);
 assert.equal(oraclePlan({sha256:'not-a-hash',approved:true,cases:[]}).approved, false);
 assert.deepEqual(oraclePlan(null).cases, []);
+// Match reconstruction::describe's actual nested payload; legacy flat previews remain covered above.
+const nestedPreview = oraclePlan({config:'d/oracle-cases.json',sha256:sha,cases:[{
+  id:'outputs',name:'outputs',requirement:'REQ-OUTPUTS',expectationSource:'Source-known acceptance case',
+  argv:['build/app.exe','write'],stdin:'input\n',timeoutSeconds:45,
+  expected:{exitCode:0,stdout:'done\n',stderr:'',files:[
+    {path:'output.txt',exists:true,text:'line one\nline two\n'},
+    {path:'digest.bin',exists:true,sha256:'c'.repeat(64)},
+    {path:'value.json',exists:true,json:null},
+    {path:'empty.txt',exists:true,text:''},
+    {path:'removed.tmp',exists:false}
+  ]}
+}]});
+assert.equal(nestedPreview.cases[0].command,'build/app.exe write');
+assert.deepEqual(nestedPreview.cases[0].expectations,[
+  'exit code 0','stdout: done\n','stderr: ','timeout: 45 seconds',
+  'file output.txt: must exist','  exact text: line one\nline two\n',
+  'file digest.bin: must exist','  SHA-256: '+'c'.repeat(64),
+  'file value.json: must exist','  JSON value: null',
+  'file empty.txt: must exist','  exact text: ',
+  'file removed.tmp: must be absent'
+],'Approval must disclose every nested backend expectation, including empty text and JSON null');
+const unspecifiedPreview=oraclePlan({sha256:sha,cases:[{name:'unset',command:'app.exe',timeoutSeconds:5,
+  expected:{exitCode:null,stdout:null,stderr:null,files:[]}}]});
+assert.deepEqual(unspecifiedPreview.cases[0].expectations,['timeout: 5 seconds'],'Unspecified backend expectations are not assertions');
 // Large results: compact above the limit, capped for display.
 assert.equal(formatSize(512), '512 B'); assert.equal(formatSize(2048), '2.0 KB'); assert.equal(formatSize(3 * 1048576), '3.0 MB');
 assert.deepEqual(rawText('{"a":1}'), {text:'{\n  "a": 1\n}', pretty:true, truncated:false, size:7});

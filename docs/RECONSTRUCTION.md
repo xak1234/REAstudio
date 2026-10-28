@@ -52,19 +52,62 @@ Each case uses exactly one of two forms:
 - `argv` (preferred): the program (relative to the destination project or absolute) and its arguments, with optional `stdin` text. It runs directly, without PowerShell, so stdout/stderr are compared byte for byte and the real exit code is reported.
 - `command`: a PowerShell command line, kept for compatibility. PowerShell re-encodes native output line by line, so exact line endings and exit codes other than 0/1 may not survive.
 
-Cases run in the destination project's root. Each needs a unique ID, requirement, `argv` or `command`, expectationSource, expected exitCode, and at least one expected output stream. Comparisons are exact, including whitespace and line endings. Omit a stream only if it is intentionally outside that case's comparison. A program that does not exist fails the case (PowerShell `CommandNotFoundException` / "is not recognized" counts as a failure unless the expected stderr declares it). At most 12 cases run per batch; output is bounded and truncation fails the case. Each case uses the 180-second timeout, and its whole process tree is ended afterwards.
+Cases run in the destination project's root. Each needs a unique ID, requirement, `argv` or `command`, expectationSource, expected exitCode, and at least one expected output stream or file assertion. Stream comparisons are exact, including whitespace and line endings. Omit a stream only if it is intentionally outside that case's comparison. A program that does not exist fails the case (PowerShell `CommandNotFoundException` / "is not recognized" counts as a failure unless the expected stderr declares it).
+
+A suite can contain up to **256 cases**. Each case accepts `timeoutSeconds` from 1 to 600, defaulting to 180; the sum of configured timeouts must be at most 7,200 seconds. For example, 256 cases can each use 20 seconds. Split longer suites into separately approved files. Both `argv` and `command` honour the case timeout and cancellation, and their process trees are ended afterwards. Stop is checked before each case and file comparison; a cancelled suite does not save a partial success report. Process output remains bounded, and truncation fails the case.
+
+### File output assertions
+
+`expected.files` checks files after the case command has completed. Version 1 configurations without this field continue to work. This example combines exact UTF-8 output with a structured JSON export and an absent error file:
+
+```json
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "export-summary",
+      "requirement": "REQ-002",
+      "argv": ["build/rebuild.exe", "--export", "output"],
+      "timeoutSeconds": 30,
+      "expectationSource": "Reviewed reference export for the supplied two-record fixture",
+      "expected": {
+        "exitCode": 0,
+        "files": [
+          {"path": "output/summary.txt", "text": "Records: 2\r\n"},
+          {"path": "output/summary.json", "json": {"records": 2, "valid": true}},
+          {"path": "output/error.txt", "exists": false}
+        ]
+      }
+    }
+  ]
+}
+```
+
+Each file assertion supports:
+
+| Field | Meaning |
+| --- | --- |
+| `path` | A distinct file path relative to the destination project. Absolute paths, paths escaping the project, symlinks and Windows reparse points are refused. |
+| `exists` | Defaults to `true` and requires a regular file. `false` requires the path to be absent and cannot accompany a content expectation. A directory does not satisfy a file-presence assertion. |
+| `sha256` | Exactly 64 hexadecimal characters; compares the file's bytes with the independently supplied digest. May accompany `text` or `json`. |
+| `text` | Exact UTF-8 bytes, including line endings and any BOM. No encoding conversion or newline normalisation. |
+| `json` | Parsed JSON structural equality. Object key ordering and insignificant whitespace do not matter; array ordering, types and values do. No numeric tolerance, field omission or string coercion. Explicit `null` is a supported expected value. Cannot accompany `text`. |
+
+There are at most 32 file assertions per case. Content comparisons read at most 4 MiB per file and 64 MiB across the suite; oversized outputs or exhausted comparison budgets fail rather than pass on partial data. Existence-only checks do not read file content. All declared paths and schemas are validated before any command executes, then paths are checked again after execution. Reports retain observed size, content SHA-256 when compared, specific differences and bounded text previews for mismatches. Original output files remain in the project.
+
+These are postcondition checks, not proof that a case created a fresh file. Arrange fresh output paths or explicit fixture setup in the reviewed harness so a stale output cannot satisfy an expectation. Expected values and hashes must come from independent observations; never derive them from the same implementation run being judged.
 
 ### Approval
 
-Oracle commands are programs that run with your Windows permissions, so a suite runs only after you approve its exact bytes. **Run oracle checks** first shows every case's command or argv, its expectations and the file's SHA-256. **Approve & run** records that hash in REA Studio's data directory (never in the project). Any later change to the file, including by an agent, requires a new review. The agent's `oracle` action and the MCP `studio_oracle_run` tool run only an approved, unchanged suite; neither can approve one, and the agent's file actions and the MCP file tools cannot reach the approval record, because REA Studio refuses to open its data directory as, inside or around a project.
+Oracle commands are programs that run with your Windows permissions, so a suite runs only after you approve its exact bytes. **Run oracle checks** first shows every case's command or argv, timeout, stream/file expectations and the configuration file's SHA-256. **Approve & run** records that hash in REA Studio's data directory (never in the project). Any later change to the file, including by an agent, requires a new review. The agent's `oracle` action and the MCP `studio_oracle_run` tool run only an approved, unchanged suite; neither can approve one, and the agent's file actions and the MCP file tools cannot reach the approval record, because REA Studio refuses to open its data directory as, inside or around a project.
 
 Approval is a consent step, not a security boundary. Shell commands run with your Windows permissions (the Code-mode `command` action and the MCP `studio_command` tool) can modify any file you can, including the approval record. Review commands an agent or MCP client runs, and use a separate environment when you need isolation.
 
-For binary files, structured data, screenshots, numerical tolerances or UI flows, write a project test/harness that compares the reconstructed output with independently supplied fixtures, then declare its command and supported expected output. The built-in runner compares stdout/stderr and exit status; it does not invent image similarity or silently normalise JSON. Store fixtures and harness code with the project. Do not distribute someone else's artifacts with this application.
+For screenshot similarity, numerical tolerances, UI flows or files beyond the built-in size limits, write a project test/harness that compares the reconstructed output with independently supplied fixtures, then declare its command and supported expected output. Built-in file assertions compare only the explicit properties above; they do not infer visual similarity or functional equivalence. Store fixtures and harness code with the project. Do not distribute someone else's artifacts with this application.
 
 ## 4. Run, inspect and retry
 
-Select the saved specification, choose Code mode, click **Run oracle checks**, review the listed commands and approve them. The runner saves an immutable report under `quixi-oracle-runs/<UUID>.json`, including commands, expectation sources, observed output, exit codes and differences.
+Select the saved specification, choose Code mode, click **Run oracle checks**, review the listed commands and approve them. The runner saves an immutable report under `quixi-oracle-runs/<UUID>.json`, including commands, timeouts, expectation sources, observed output/file comparisons, exit codes and differences. Per-requirement counts cover declared cases only; requirements absent from the suite remain unverified.
 
 - `unverified`: no cases were declared. This is not a pass.
 - `failed`: at least one case did not match or could not run completely.

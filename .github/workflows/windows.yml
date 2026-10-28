@@ -32,15 +32,7 @@ jobs:
         run: |
           node scripts/audit-public.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node --check resources/playground/app.js
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node --check scripts/smoke-windows.cjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node --check scripts/smoke-mcp.cjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/check-analysis.cjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/check-reconstruction.cjs
+          ./scripts/run-integration-checks.ps1 -OutputDirectory (Join-Path $env:RUNNER_TEMP 'rea-studio-validation')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Type check and lint Rust
         run: |
@@ -52,20 +44,54 @@ jobs:
         run: |
           cargo build --release --workspace --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release -p quixi-platform --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release -p quixi-workspace --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release -p quixi-engine playground::tests --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release -p quixi-engine analysis::tests --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release -p quixi-engine reconstruction::tests --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release -p quixi-engine providers::tests --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release -p quixi-app --locked
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $out = Join-Path $env:RUNNER_TEMP 'rea-studio-validation'
+          New-Item $out -ItemType Directory -Force | Out-Null
+          $suites = @(
+            @{package='quixi-platform';filter=''},
+            @{package='quixi-workspace';filter=''},
+            @{package='quixi-mcp';filter=''},
+            @{package='quixi-engine';filter='ida::tests'},
+            @{package='quixi-engine';filter='debugger::tests'},
+            @{package='quixi-engine';filter='decompile::tests'},
+            @{package='quixi-engine';filter='playground::tests'},
+            @{package='quixi-engine';filter='analysis::tests'},
+            @{package='quixi-engine';filter='analysis::investigations::tests'},
+            @{package='quixi-engine';filter='reconstruction::tests'},
+            @{package='quixi-engine';filter='providers::tests'},
+            @{package='quixi-app';filter=''}
+          )
+          $receipts = @()
+          foreach ($suite in $suites) {
+            $arguments = @('test','--release','-p',$suite.package,'--locked')
+            if ($suite.filter) { $arguments += $suite.filter }
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            $lines = @(& cargo @arguments 2>&1)
+            $code = $LASTEXITCODE
+            $clock.Stop()
+            $name = $suite.package + $(if ($suite.filter) { '-' + $suite.filter.Replace('::','-') })
+            $lines | Tee-Object -FilePath (Join-Path $out ($name + '.log'))
+            $counts = [regex]::Matches(($lines -join "`n"), 'test result:.*? (\d+) passed; (\d+) failed; (\d+) ignored;')
+            $passed = 0; $failed = 0; $ignored = 0
+            foreach ($count in $counts) {
+              $passed += [int]$count.Groups[1].Value
+              $failed += [int]$count.Groups[2].Value
+              $ignored += [int]$count.Groups[3].Value
+            }
+            $status = if ($code -eq 0 -and ($passed + $failed + $ignored) -gt 0) { 'passed' } else { 'failed' }
+            $receipts += [pscustomobject]@{suite=$name;status=$status;exitCode=$code;passed=$passed;failed=$failed;ignored=$ignored;durationMs=$clock.ElapsedMilliseconds}
+            $receipts | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out 'rust-tests.json') -Encoding utf8
+            if ($status -eq 'failed') { exit 1 }
+          }
+      # Licensed/live tests are #[ignore] and appear as ignored in cargo's summary.
+      # Select them explicitly with -- --ignored --nocapture on a configured test host.
+      - name: Upload validation receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rea-studio-validation
+          path: ${{ runner.temp }}/rea-studio-validation/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Build the complete release archive
         if: github.event_name != 'pull_request'
         run: ./scripts/package-windows.ps1 -SkipBuild

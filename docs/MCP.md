@@ -23,20 +23,44 @@ The listener binds only to `127.0.0.1`. Host and Origin headers are checked, and
 | `studio_files`, `studio_read_file`, `studio_diff` | Actual project files (`truncated` when the 2000-file listing stopped early), content/hash with `lineEnding` (`crlf`, `lf` or `mixed`) and `bom`, and Git changes: `files` (`path`, `status`, `staged`, `additions`, `deletions`), working-tree `diff` and `staged` diff bounded to 2 MiB each with `truncated`. Outside a Git repository the lists are empty. |
 | `studio_write_file` | Write with the hash from a preceding read; empty hash only for a new file (an existing path returns "File already exists"). Optional `lineEnding: "crlf"` converts LF to CRLF and `bom: true` prefixes a UTF-8 BOM; the returned hash is of the bytes written. |
 | `studio_command` | Execute a bounded noninteractive command in the project root (PowerShell 7 when installed, otherwise Windows PowerShell 5.1; `shell` reports which). Output keeps the first 60% and last 40% of 128 KiB per stream. |
-| `studio_start_run`, `studio_run_status`, `studio_stop_run` | Start a model task (optional `maxSteps` 1–100, `contextBudget` 50000–2000000 characters, `maxOutputTokens` 256–128000, `confirmCommands` `risky`/`all`/`never`, `parentRun` for a follow-up of an earlier task in the same project), inspect actual results, and stop it. Commands that need approval set status `awaiting_approval` with `pendingCommand`; only the user can approve or deny them in the desktop, and no MCP tool does. Run status includes `changes` (files the agent wrote, with `beforeHash`, `afterHash` and `conflict`), `provider`, `startedAt`, `finishedAt` and `steps`. |
+| `studio_start_run`, `studio_run_status`, `studio_stop_run` | Start a model task (optional exact connection `provider`, `maxSteps` 1–100, `contextBudget` 50000–2000000 requested UTF-8 bytes, `maxOutputTokens` 256–128000, `confirmCommands` `risky`/`all`/`never`, `parentRun` for a follow-up of an earlier task in the same project), inspect actual results, and stop it. Commands that need approval set status `awaiting_approval` with `pendingCommand`; only the user can approve or deny them in the desktop, and no MCP tool does. Run status includes `changes` (files the agent wrote, with `beforeHash`, `afterHash` and `conflict`), `provider`, `startedAt`, `finishedAt`, `steps`, effective `contextLimits`, and a durable `checkpoint`. |
 | `studio_rea_catalog` | Available static REA names and session state, or one full live tool schema. |
 | `studio_rea_select`, `studio_rea_call`, `studio_rea_evidence` | Select an artifact, call a static tool, and inspect saved evidence. |
+| `studio_investigation` | List, create, inspect, export or explicitly delete project-scoped immutable artifact snapshots; no target execution. See the action contract below. |
 | `studio_export_spec` | Export a reconstruction specification and evidence dossier. |
 | `studio_oracle_preview` | Read an oracle suite's cases, SHA-256 and approval state. |
-| `studio_oracle_run` | Execute a user-approved oracle suite and retain real comparisons. Refused until the user approves the file's exact SHA-256 in the desktop. No MCP tool approves a suite, and the data folder holding approvals cannot be opened as a project; `studio_command` runs with the user's permissions and is not a security boundary. |
+| `studio_oracle_run` | Execute a user-approved oracle suite and retain real comparisons. Optional caller-generated UUID `operationId` allows cancellation through `studio_stop_run` with `id: operationId` and `project`. Refused until the user approves the file's exact SHA-256 in the desktop. No MCP tool approves a suite, and the data folder holding approvals cannot be opened as a project; `studio_command` runs with the user's permissions and is not a security boundary. |
 
 The MCP tool catalog includes each operation's input schema. Open a project first and use its returned ID. The REA catalog is discovered from the running provider. The separate x64dbg tools become usable after desktop enablement and session selection. Arbitrary debugger commands, session selection, remote debugger connections, patching and toolchain registration are not exposed by that bridge. Decompilation assistance must be configured and enabled in the desktop; its optional input contains one reviewed function, and recordId must reference successful original evidence for the selected target. Shell commands and Code tasks still run with the signed-in user's normal permissions.
 
 Requests are limited to 3 MiB and four concurrent handlers. Recent tool activity records the tool name, completion status and duration in the settings menu; credentials and tool arguments are not logged there. Tool failures use MCP `isError`; they do not become successful analysis results.
 
+## Multi-artifact investigations
+
+`studio_investigation` uses the same saved sets as the desktop investigation panel. Every action requires the project ID returned by `studio_open_project`. Arguments are specific to each action; unused arguments are rejected.
+
+| Action | Additional arguments | Result |
+| --- | --- | --- |
+| `list` | None | `investigations` summaries and explicit `limits`. |
+| `create` | `name` (1-120 characters), `targets` (1-32 absolute local file paths) | An immutable `investigation` with file paths, sizes and SHA-256 identities. |
+| `inspect` | `id` (saved investigation UUID) | Per-artifact current/changed/missing/unavailable status, matching/excluded/failed/model-suggestion counts, `readyToExport` and `limits`. |
+| `export` | `id` | Unique bundle `path` and `relativePath`, artifact/record/exclusion counts. |
+| `delete` | `id`, `confirmDelete: true` | `deleted` investigation ID; only saved snapshot metadata is removed. |
+
+Example: `{"action":"create","project":"PROJECT_ID","name":"Release modules","targets":["E:\\fixtures\\app.exe","E:\\fixtures\\plugin.dll"]}`. Reuse the returned `investigation.id` for `inspect` or `export`. The chosen project must be separate from every input artifact directory before export. Create, export and delete are refused while a model task is running or stopping.
+
+Export stages a new directory and verifies every pinned artifact again before publishing the bundle. Changed or missing files, no matching saved evidence overall, malformed history or a size/count limit fail explicitly. The manifest retains exclusions, failed observations and modules with no matching evidence; model suggestions remain unverified. Original targets are never executed or copied. Deleting a set preserves original files, saved evidence and previous bundles. This is version-pinned evidence, not complete application coverage or a reconstruction specification. See [Investigations](INVESTIGATIONS.md) for exact bounds, storage, and manifest semantics.
+
+## Model identity, context and continuity
+
+Pass an exact model ID and optionally its connection ID in `provider` (for example `custom`). Qualified `provider::model` is also accepted when `provider` is omitted. A missing model or an unconfirmed catalog placeholder is refused before a model request; an explicitly selected connection is never replaced by another connection.
+
+The effective input limit is the smaller of the requested byte budget and configured model context minus output and system/message reserves. Counting one UTF-8 input byte against one token is deliberately conservative, not an exact tokenizer. Set a connection's context window to the capacity actually configured on its server. Run `contextLimits` records the configured context, output reserve and effective input bytes. If the retained protocol and latest evidence still exceed that limit after compaction, the run fails clearly before sending an oversized request.
+
+Runs save working notes, bounded recent action summaries and pending-action state in `checkpoint`. After an interrupted run, start a follow-up using `parentRun`; it receives those notes and must inspect actual files/runtime state before continuing. A pending action may already have taken effect. Checkpoints never replay commands automatically.
 ## Minimal local client check
 
-Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.2.0`, twenty-seven tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
+Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.4.0`, twenty-eight tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
 
 ## Receive code from an agent
 

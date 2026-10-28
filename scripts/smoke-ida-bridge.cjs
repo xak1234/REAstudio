@@ -23,7 +23,7 @@ const { chromium } = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwr
   const text = r => (r.response?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
   const json = r => r.response?.structuredContent || JSON.parse(text(r));
   const sidecars = () => fs.readdirSync(root).filter(n => /\.(i64|idb|id0|id1|id2|nam|til)$/i.test(n));
-  let mcp;
+  let mcp, restoreAddress;
   try {
     await page.reload(); await page.locator('#connection').filter({ hasText: 'Connected' }).waitFor();
     const before = await native('ida/status');
@@ -46,9 +46,19 @@ const { chromium } = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwr
     const funcs = await call('list_funcs', { queries: { filter: '*quixi_add*', count: 5 } });
     assert.equal(funcs.failed, false, text(funcs));
     const listing = json(funcs); const page0 = (listing.result || listing)[0];
-    let address = (page0?.data || []).find(f => /quixi_add/.test(f.name))?.addr;
-    if (!address) address = json(await call('lookup_funcs', { queries: 'quixi_add' })).result[0].fn.addr;
-    assert(address, 'IDA did not identify the fixture function quixi_add');
+    let address = (page0?.data || []).find(f => f.name === 'quixi_add')?.addr;
+    if (!address) {
+      const looked = json(await call('lookup_funcs', { queries: 'quixi_add' }));
+      address = (looked.result || looked)[0]?.fn?.addr;
+    }
+    if (!address) {
+      // An interrupted earlier smoke may have persisted its own rename in this fixture's private cache.
+      const prior = json(await call('list_funcs', { queries: { filter: 'rea_smoke_*', count: 100 } }));
+      const candidates = ((prior.result || prior)[0]?.data || []).filter(f => /^rea_smoke_[a-f0-9]{8}$/.test(f.name));
+      assert.equal(candidates.length, 1, 'Expected quixi_add or exactly one prior smoke-owned rename in the fixture IDB');
+      address = candidates[0].addr;
+    }
+    assert(address, 'IDA did not identify the fixture function quixi_add'); restoreAddress = address;
     const decompiled = await call('decompile', { addr: address });
     assert.equal(decompiled.failed, false, text(decompiled)); assert.match(text(decompiled), /return|\+/);
     const xrefs = await call('xrefs_to', { addrs: address }); assert.equal(xrefs.failed, false, text(xrefs));
@@ -57,7 +67,8 @@ const { chromium } = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwr
     assert.equal(renamed.failed, false, text(renamed)); assert.equal(renamed.provenance.savedAfterAnnotation, true);
     await assert.rejects(() => call('py_eval', { code: '1+1' }), /not available through the IDA bridge/);
     await assert.rejects(() => call('patch', { patches: [{ addr: address, data: '90' }] }), /not available through the IDA bridge/);
-    await assert.rejects(() => call('idb_save', { path: path.join(root, 'elsewhere.i64') }), /destination path/);
+    await assert.rejects(() => call('idb_save', { path: path.join(root, 'elsewhere.i64') }), /destination/);
+    assert.equal(fs.existsSync(path.join(root, 'elsewhere.i64')), false, 'Rejected save must not write another database');
     await native('ida/settings', { allowAnnotations: false });
     await assert.rejects(() => call('set_comments', { items: { addr: address, comment: 'x' } }), /Allow annotations/);
     await native('ida/settings', { allowAnnotations: true });
@@ -80,10 +91,25 @@ const { chromium } = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwr
     const after = await call('lookup_funcs', { queries: address });
     assert.match(text(after), new RegExp(newName), 'The rename must persist in the cached database');
     assert.equal(crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex'), hash, 'The artifact must be unchanged');
+    const restored = await call('rename', { batch: { func: [{ addr: address, name: 'quixi_add' }] } });
+    assert.equal(restored.failed, false, text(restored)); assert.equal(restored.provenance.savedAfterAnnotation, true);
+    assert.match(text(await call('lookup_funcs', { queries: address })), /quixi_add/); restoreAddress = null;
     assert.equal((await native('ida/close')).failed, false);
     await native('ida/disable');
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ passed: true, tools: enabled.tools.length, function: address, renamedTo: newName,
       openRecord: opened.id, decompileRecord: decompiled.id, renameRecord: renamed.id, idbPath: status.session.idbPath, jsErrors: errors }));
-  } finally { try { await native('ida/disable'); } catch {} if (mcp) await mcp.close(); await browser.close(); }
+  } finally {
+    if (restoreAddress) {
+      try {
+        const status = await native('ida/status');
+        if (status.connected && status.session) {
+          await native('rea/select', { path: target }); await native('ida/settings', { allowAnnotations: true });
+          const restored = await call('rename', { batch: { func: [{ addr: restoreAddress, name: 'quixi_add' }] } });
+          assert.equal(restored.failed, false, text(restored));
+        }
+      } catch (error) { console.error('Fixture-name cleanup failed; the next smoke can recover its own prior rename:', error.message); }
+    }
+    try { await native('ida/disable'); } catch {} if (mcp) await mcp.close(); await browser.close();
+  }
 })().catch(e => { console.error(e); process.exitCode = 1; });

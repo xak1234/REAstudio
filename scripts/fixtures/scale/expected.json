@@ -1,0 +1,178 @@
+{
+  "version": 1,
+  "file": "rea-scale-fixture.exe",
+  "generatedFunctions": 2304,
+  "anchor": "REA-SCALE-QUOTE-V1",
+  "requiredImports": [
+    "WriteFile",
+    "GetStdHandle"
+  ],
+  "quoteFacts": [
+    {
+      "name": "output protocol",
+      "pattern": "REA-SCALE-QUOTE-V1"
+    },
+    {
+      "name": "standard tier",
+      "pattern": "STANDARD"
+    },
+    {
+      "name": "volume tier",
+      "pattern": "VOLUME"
+    },
+    {
+      "name": "quantity upper bound",
+      "pattern": "\\b(?:200|199|0[xX]0*[cC][78])[uUlL]*\\b"
+    },
+    {
+      "name": "volume boundary",
+      "pattern": "\\b(?:12|11|0[xX]0*[bBcC])[uUlL]*\\b"
+    },
+    {
+      "name": "standard unit price",
+      "pattern": "\\b(?:19|0[xX]0*13)[uUlL]*\\b"
+    },
+    {
+      "name": "volume unit price",
+      "pattern": "\\b(?:17|0[xX]0*11)[uUlL]*\\b"
+    },
+    {
+      "name": "expedited surcharge",
+      "pattern": "\\b5[uUlL]*\\b"
+    }
+  ],
+  "runtimeCases": [
+    {
+      "id": "standard",
+      "args": [
+        "quote",
+        "2",
+        "0"
+      ],
+      "exitCode": 0,
+      "stdout": "REA-SCALE-QUOTE-V1 quantity=2 total=38 tier=STANDARD\n",
+      "stderr": ""
+    },
+    {
+      "id": "boundary-before",
+      "args": [
+        "quote",
+        "11",
+        "1"
+      ],
+      "exitCode": 0,
+      "stdout": "REA-SCALE-QUOTE-V1 quantity=11 total=214 tier=STANDARD\n",
+      "stderr": ""
+    },
+    {
+      "id": "boundary-at",
+      "args": [
+        "quote",
+        "12",
+        "1"
+      ],
+      "exitCode": 0,
+      "stdout": "REA-SCALE-QUOTE-V1 quantity=12 total=209 tier=VOLUME\n",
+      "stderr": ""
+    },
+    {
+      "id": "maximum",
+      "args": [
+        "quote",
+        "200",
+        "0"
+      ],
+      "exitCode": 0,
+      "stdout": "REA-SCALE-QUOTE-V1 quantity=200 total=3400 tier=VOLUME\n",
+      "stderr": ""
+    },
+    {
+      "id": "too-many",
+      "args": [
+        "quote",
+        "201",
+        "0"
+      ],
+      "exitCode": 2,
+      "stdout": "",
+      "stderr": "invalid quote\n"
+    },
+    {
+      "id": "zero",
+      "args": [
+        "quote",
+        "0",
+        "0"
+      ],
+      "exitCode": 2,
+      "stdout": "",
+      "stderr": "invalid quote\n"
+    },
+    {
+      "id": "priority-invalid",
+      "args": [
+        "quote",
+        "12",
+        "2"
+      ],
+      "exitCode": 2,
+      "stdout": "",
+      "stderr": "invalid quote\n"
+    },
+    {
+      "id": "integer-invalid",
+      "args": [
+        "quote",
+        "oops",
+        "0"
+      ],
+      "exitCode": 2,
+      "stdout": "",
+      "stderr": "invalid integer\n"
+    },
+    {
+      "id": "dispatch-first",
+      "args": [
+        "dispatch",
+        "0",
+        "0"
+      ],
+      "exitCode": 0,
+      "stdout": "REA-SCALE-DISPATCH-V1 index=0 value=2654435772\n",
+      "stderr": ""
+    },
+    {
+      "id": "dispatch-middle",
+      "args": [
+        "dispatch",
+        "511",
+        "17"
+      ],
+      "exitCode": 0,
+      "stdout": "REA-SCALE-DISPATCH-V1 index=511 value=1861447701\n",
+      "stderr": ""
+    },
+    {
+      "id": "dispatch-last",
+      "args": [
+        "dispatch",
+        "2303",
+        "12345"
+      ],
+      "exitCode": 0,
+      "stdout": "REA-SCALE-DISPATCH-V1 index=2303 value=4081535037\n",
+      "stderr": ""
+    },
+    {
+      "id": "dispatch-range",
+      "args": [
+        "dispatch",
+        "2304",
+        "0"
+      ],
+      "exitCode": 2,
+      "stdout": "",
+      "stderr": "invalid dispatch\n"
+    }
+  ]
+}

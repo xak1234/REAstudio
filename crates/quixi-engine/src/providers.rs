@@ -65,6 +65,9 @@ pub struct ProviderEntry {
     pub selected_model: String,
     pub models: Vec<ProviderModelInfo>,
     pub custom_models: Vec<String>,
+    /// Exact IDs observed from this endpoint. Catalog placeholders only become usable if advertised.
+    #[serde(default)]
+    pub advertised_models: Vec<String>,
     pub context_window: u32,
     pub last_tested_ok: Option<bool>,
     pub last_latency_ms: Option<u64>,
@@ -185,6 +188,7 @@ impl ProviderManager {
                     Self::model("qwen/qwen3-coder-480b", "Qwen 3 Coder 480B (via OpenRouter)", 128_000, true, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 200_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -217,6 +221,7 @@ impl ProviderManager {
                     Self::model("custom-model", "Custom Model ID", 128_000, true, true),
                 ],
                 custom_models: vec!["custom-model".to_string()],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -260,6 +265,7 @@ impl ProviderManager {
                     Self::model("gpt-4.1", "GPT-4.1 (Platform API)", 1_000_000, false, true),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 256_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -295,6 +301,7 @@ impl ProviderManager {
                     Self::model("grok-3", "Grok 3", 131_072, true, true),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 256_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -329,6 +336,7 @@ impl ProviderManager {
                     Self::model("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 200_000, false, true),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 200_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -363,6 +371,7 @@ impl ProviderManager {
                     Self::model("gemini-2.5-flash", "Gemini 2.5 Flash", 1_000_000, true, true),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 1_000_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -396,6 +405,7 @@ impl ProviderManager {
                     Self::model("deepseek-reasoner", "DeepSeek R1 (Reasoner)", 128_000, true, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -430,6 +440,7 @@ impl ProviderManager {
                     Self::model("qwen-qwq-32b", "Qwen QwQ 32B", 128_000, true, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -463,6 +474,7 @@ impl ProviderManager {
                     Self::model("codestral-latest", "Codestral", 256_000, false, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -496,6 +508,7 @@ impl ProviderManager {
                     Self::model("MiniMax-M1", "MiniMax M1", 1_000_000, true, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 200_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -529,6 +542,7 @@ impl ProviderManager {
                     Self::model("glm-4.5", "GLM-4.5", 128_000, true, true),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -562,6 +576,7 @@ impl ProviderManager {
                     Self::model("moonshot-v1-128k", "Moonshot v1 128K", 128_000, false, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 256_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -595,6 +610,7 @@ impl ProviderManager {
                     Self::model("command-r-plus-08-2024", "Command R+", 128_000, false, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 256_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -628,6 +644,7 @@ impl ProviderManager {
                     Self::model("meta-llama/Llama-3.3-70B-Instruct-Turbo", "Llama 3.3 70B Turbo", 128_000, false, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -661,6 +678,7 @@ impl ProviderManager {
                     Self::model("accounts/fireworks/models/llama-v3p3-70b-instruct", "Llama 3.3 70B (Fireworks)", 128_000, false, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -695,6 +713,7 @@ impl ProviderManager {
                     Self::model("deepseek-r1:32b", "DeepSeek R1 32B", 128_000, true, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -727,6 +746,7 @@ impl ProviderManager {
                     Self::model("local-model", "Loaded LM Studio Model", 128_000, true, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -759,6 +779,7 @@ impl ProviderManager {
                     Self::model("vllm-model", "Served vLLM Model", 128_000, true, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -791,6 +812,7 @@ impl ProviderManager {
                     Self::model("gguf-model", "Loaded GGUF Model", 128_000, true, false),
                 ],
                 custom_models: vec![],
+                advertised_models: Vec::new(),
                 context_window: 128_000,
                 last_tested_ok: None,
                 last_latency_ms: None,
@@ -913,6 +935,10 @@ impl ProviderManager {
                             }
                         }
                     }
+                    if let Some(models) = saved_p.get("advertisedModels").and_then(Value::as_array) {
+                        entry.advertised_models = models.iter().filter_map(Value::as_str)
+                            .filter(|id| !id.is_empty()).take(2000).map(str::to_owned).collect();
+                    }
                     if let Some(cm) = saved_p.get("customModels").and_then(|v| v.as_array()) {
                         entry.custom_models = cm
                             .iter()
@@ -933,7 +959,45 @@ impl ProviderManager {
                 }
             }
         }
+        // Repair stale catalog placeholders only within the same configured connection.
+        // A deliberate alternative model remains selected when that connection knows it.
+        Self::repair_active_selection(&mut catalog);
         Some(catalog)
+    }
+
+    fn placeholder_model(model: &str) -> bool {
+        matches!(model.trim(), "" | "custom-model" | "local-model" | "vllm-model" | "gguf-model")
+    }
+
+    fn owns_model(entry: &ProviderEntry, model: &str) -> bool {
+        entry.configured && (!Self::placeholder_model(model) || entry.advertised_models.iter().any(|id|id==model))
+            && (entry.selected_model == model || entry.models.iter().any(|m|
+                m.id == model && Self::is_model_available_for_provider(entry, m)))
+    }
+
+    fn repair_active_selection(state: &mut ProvidersStateFile) {
+        if let Some(entry) = state.providers.iter_mut().find(|p| p.id == state.active_provider && p.configured) {
+            if !Self::placeholder_model(&entry.selected_model) || entry.advertised_models.contains(&entry.selected_model) {
+                entry.models.retain(|m| !Self::placeholder_model(&m.id) || entry.advertised_models.contains(&m.id));
+                entry.custom_models.retain(|m| !Self::placeholder_model(m) || entry.advertised_models.contains(m));
+                if !Self::owns_model(entry, &state.active_model) {
+                    state.active_model = entry.selected_model.clone();
+                }
+            }
+        }
+    }
+
+    /// Resolve an exact model and optional explicit connection without making an HTTP request.
+    /// The context window is configured metadata, not a measured server capacity.
+    pub fn run_selection(&self, model: &str, provider: Option<&str>) -> Result<(String, String, u32), CompletionError> {
+        let requested = provider.filter(|p| !p.trim().is_empty())
+            .map(|p| format!("{}::{model}", p.trim())).unwrap_or_else(|| model.to_owned());
+        let (provider, _, model, _, _, _, _) = self.select_provider(Some(&requested), true)?;
+        let state = self.state.read();
+        let entry = state.providers.iter().find(|p| p.id == provider).expect("selected provider exists");
+        let model_context = entry.models.iter().find(|m| m.id == model)
+            .map(|m| m.context_window).filter(|n| *n >= 1024).unwrap_or(entry.context_window);
+        Ok((provider, model, model_context.min(entry.context_window).max(1024)))
     }
 
     pub fn persist(&self) {
@@ -1056,6 +1120,8 @@ impl ProviderManager {
             public["credentialSource"] = json!(source);
             public["environmentVariable"] = json!(variable);
             public["environmentCandidates"] = json!(Self::environment_key_names(entry, &entry.base_url));
+            public["selectedModelValid"] = json!(Self::owns_model(entry, &entry.selected_model));
+            public["models"] = json!(entry.models.iter().filter(|m| !Self::placeholder_model(&m.id) || entry.advertised_models.contains(&m.id)).collect::<Vec<_>>());
             public
         }).collect();
         json!({
@@ -1077,6 +1143,13 @@ impl ProviderManager {
             .and_then(|v| v.as_str())
             .unwrap_or("openrouter");
 
+        if let Some(cw) = body.get("contextWindow") {
+            if !cw.as_u64().is_some_and(|n| (1024..=2_000_000).contains(&n)) {
+                let mut result = self.get_public_state();
+                result["error"] = json!("Context window must be between 1,024 and 2,000,000 tokens; use the server's configured capacity.");
+                return result;
+            }
+        }
         let mut st = self.state.write();
         let mut updated_model = String::new();
         let mut found = false;
@@ -1093,7 +1166,9 @@ impl ProviderManager {
             }
             if let Some(base_url) = body.get("baseUrl").and_then(|v| v.as_str()) {
                 if !base_url.trim().is_empty() {
-                    entry.base_url = base_url.trim().trim_end_matches('/').to_string();
+                    let new_url = base_url.trim().trim_end_matches('/');
+                    if entry.base_url.trim_end_matches('/') != new_url { entry.advertised_models.clear(); }
+                    entry.base_url = new_url.to_string();
                 }
             }
             if let Some(api_format) = body.get("apiFormat").and_then(|v| v.as_str()) {
@@ -1151,11 +1226,22 @@ impl ProviderManager {
             } else {
                 entry.configured = true;
             }
+            // A custom/local endpoint's serving capacity is user configuration. Its
+            // discovered IDs inherit this capacity; stale catalog metadata must not
+            // silently cap an explicitly increased server context. Official provider
+            // model limits remain intact and can still cap a connection-level value.
+            if body.get("contextWindow").is_some()
+                && (entry.category == "local" || entry.auth_mode == "custom" || entry.auth_mode == "local")
+            {
+                if let Some(model) = entry.models.iter_mut().find(|m| m.id == entry.selected_model) {
+                    model.context_window = entry.context_window;
+                }
+            }
             updated_model = entry.selected_model.clone();
         }
 
         if found && missing_credential.is_none() {
-            if body
+            if st.active_provider == provider_id || body
                 .get("setAsActive")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true)
@@ -1173,6 +1259,7 @@ impl ProviderManager {
                 st.onboarding_completed = true;
             }
         }
+        Self::repair_active_selection(&mut st);
         drop(st);
         self.persist();
         let mut state = self.get_public_state();
@@ -1223,6 +1310,16 @@ impl ProviderManager {
     }
 
     pub fn complete_onboarding(&self, body: &Value) -> Value {
+        let (provider, model) = {
+            let state = self.state.read();
+            (body["activeProvider"].as_str().unwrap_or(&state.active_provider).to_owned(),
+             body["activeModel"].as_str().unwrap_or(&state.active_model).to_owned())
+        };
+        if let Err(error) = self.run_selection(&model, Some(&provider)) {
+            let mut result = self.get_public_state();
+            result["error"] = json!(error.to_string());
+            return result;
+        }
         let mut st = self.state.write();
         if let Some(ap) = body.get("activeProvider").and_then(|v| v.as_str()) {
             if !ap.is_empty() {
@@ -1368,6 +1465,11 @@ impl ProviderManager {
             if let Some(entry) = st.providers.iter_mut().find(|p| p.id == provider_id) {
                 entry.last_tested_ok = Some(ok);
                 entry.last_latency_ms = Some(latency_ms);
+                if ok && !discovered_models.is_empty() && entry.base_url.trim_end_matches('/') == base_url {
+                    entry.advertised_models = discovered_models.clone();
+                    entry.models.retain(|m| !Self::placeholder_model(&m.id) || entry.advertised_models.contains(&m.id));
+                    entry.custom_models.retain(|m| !Self::placeholder_model(m) || entry.advertised_models.contains(m));
+                }
                 for m_id in &discovered_models {
                     if !entry.models.iter().any(|m| &m.id == m_id) {
                         entry.models.push(Self::model(
@@ -1396,6 +1498,11 @@ impl ProviderManager {
     pub fn remember_models(&self, provider: &str, models: &[&str]) {
         let mut st = self.state.write();
         if let Some(entry) = st.providers.iter_mut().find(|p| p.id == provider) {
+            if !models.is_empty() {
+                entry.advertised_models = models.iter().filter(|id| !id.is_empty()).take(2000).map(|id| (*id).to_owned()).collect();
+                entry.models.retain(|m| !Self::placeholder_model(&m.id) || entry.advertised_models.contains(&m.id));
+                entry.custom_models.retain(|m| !Self::placeholder_model(m) || entry.advertised_models.contains(m));
+            }
             for id in models.iter().filter(|id| !id.is_empty()).take(2000) {
                 if !entry.models.iter().any(|m| m.id == *id) {
                     entry.models.push(Self::model(id, id, entry.context_window, false, false));
@@ -1418,6 +1525,11 @@ impl ProviderManager {
             if let Some(first_model) = models.first() {
                 entry.selected_model = first_model.clone();
             }
+        }
+        if !models.is_empty() {
+            entry.advertised_models = models.iter().take(2000).cloned().collect();
+            entry.models.retain(|m| !Self::placeholder_model(&m.id) || entry.advertised_models.contains(&m.id));
+            entry.custom_models.retain(|m| !Self::placeholder_model(m) || entry.advertised_models.contains(m));
         }
         for mid in models {
             if !entry.models.iter().any(|m| &m.id == mid) {
@@ -2608,46 +2720,32 @@ impl ProviderManager {
         requested: Option<&str>,
         strict: bool,
     ) -> Result<SelectedProvider, CompletionError> {
-        let requested = requested.filter(|m| !m.trim().is_empty());
-        let resolved_model = match requested {
-            Some(model) if strict => model.to_string(),
-            _ => self.resolve_connected_model(requested),
+        let requested = requested.map(str::trim).filter(|m| !m.is_empty());
+        let (provider_hint, model_hint) = match requested.and_then(|s| s.split_once("::")) {
+            Some((provider, model)) => (Some(provider), Some(model)),
+            None => (None, requested),
         };
+        let resolved_model = model_hint.map(str::to_owned)
+            .unwrap_or_else(|| self.resolve_connected_model(None));
         let st = self.state.read();
-        let owns = |p: &ProviderEntry| {
-            p.configured
-                && (p.selected_model == resolved_model
-                    || p.models.iter().any(|m| m.id == resolved_model))
-        };
-        let owner = st
-            .providers
-            .iter()
-            .find(|p| p.id == st.active_provider && owns(p))
-            .or_else(|| {
-                st.providers.iter().find(|p| {
-                    p.configured
-                        && (p.selected_model == resolved_model
-                            || p.models.iter().any(|m| {
-                                m.id == resolved_model
-                                    && Self::is_model_available_for_provider(p, m)
-                            }))
-                })
-            });
+        let preferred = provider_hint.unwrap_or(&st.active_provider);
+        let owner = st.providers.iter().find(|p| p.id == preferred && Self::owns_model(p, &resolved_model))
+            .or_else(|| if provider_hint.is_none() {
+                st.providers.iter().find(|p| Self::owns_model(p, &resolved_model))
+            } else { None });
+        if Self::placeholder_model(&resolved_model) && owner.is_none() {
+            return Err(CompletionError::Unavailable(format!(
+                "{resolved_model:?} is an unconfirmed catalog placeholder. Discover models in Connections and select an exact served ID. Explicitly advertised aliases remain supported."
+            )));
+        }
         let entry = match owner {
             Some(entry) => entry,
-            None if strict => st.providers.iter().find(|p| owns(p)).ok_or_else(|| {
-                CompletionError::Unavailable(format!(
-                    "Model {resolved_model} is not offered by a configured provider. Choose a configured model; REA Studio does not substitute another model."
-                ))
-            })?,
-            None => st
-                .providers
-                .iter()
-                .find(|p| p.id == st.active_provider && p.configured)
-                .or_else(|| st.providers.iter().find(|p| p.configured))
-                .ok_or_else(|| {
-                    CompletionError::Unavailable("No model provider is configured.".into())
-                })?,
+            None if strict || requested.is_some() => return Err(CompletionError::Unavailable(format!(
+                "Model {resolved_model} is not offered by the selected configured connection{}. Discover models and choose one explicitly; REA Studio does not substitute another model.",
+                provider_hint.map(|p| format!(" {p}")).unwrap_or_default()
+            ))),
+            None => st.providers.iter().find(|p| p.id == st.active_provider && p.configured)
+                .ok_or_else(|| CompletionError::Unavailable("No model provider is configured.".into()))?,
         };
 
         let cred = Self::resolve_key(entry, "", &entry.base_url).0;
@@ -3239,6 +3337,67 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn saving_active_connection_repairs_selection_without_switching_connections() {
+        let directory = std::env::temp_dir().join(format!("quixi-selection-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let manager = ProviderManager::new(&directory);
+        manager.save_provider(&json!({"providerId":"custom","selectedModel":"old-served","setAsActive":true}));
+        manager.save_provider(&json!({"providerId":"custom","selectedModel":"new-served","contextWindow":32768,"setAsActive":false}));
+        assert_eq!(manager.state.read().active_model, "new-served");
+        manager.save_provider(&json!({"providerId":"ollama","selectedModel":"different","setAsActive":false}));
+        assert_eq!(manager.state.read().active_provider, "custom");
+        assert_eq!(manager.state.read().active_model, "new-served");
+        assert_eq!(manager.run_selection("new-served", Some("custom")).unwrap(),
+            ("custom".into(), "new-served".into(), 32768));
+        manager.save_provider(&json!({"providerId":"custom","contextWindow":262144,"setAsActive":false}));
+        assert_eq!(manager.run_selection("new-served", Some("custom")).unwrap().2, 262144);
+        assert!(manager.run_selection("custom-model", Some("custom")).unwrap_err().to_string().contains("placeholder"));
+        assert!(manager.run_selection("new-served", Some("ollama")).is_err());
+        assert!(manager.select_provider(Some("unknown-model"), false).is_err());
+        let invalid = manager.complete_onboarding(&json!({"activeProvider":"custom","activeModel":"missing"}));
+        assert!(invalid["error"].as_str().unwrap().contains("does not substitute"));
+        assert_eq!(manager.state.read().active_model, "new-served");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saved_placeholder_migrates_to_real_selection_in_same_connection() {
+        let state = ProviderManager::merge_saved_state(ProviderManager::default_catalog(), &json!({
+            "activeProvider":"custom","activeModel":"custom-model",
+            "providers":[{"id":"custom","configured":true,"selectedModel":"served-model"}]
+        })).unwrap();
+        assert_eq!(state.active_model, "served-model");
+        let custom = state.providers.iter().find(|p|p.id=="custom").unwrap();
+        assert!(!custom.models.iter().any(|m|m.id=="custom-model"));
+        let mut state = state;
+        let custom = state.providers.iter_mut().find(|p|p.id=="custom").unwrap();
+        custom.models.push(ProviderManager::model("intentional-alternative", "Alternative", 32768, false, false));
+        state.active_model = "intentional-alternative".into();
+        ProviderManager::repair_active_selection(&mut state);
+        assert_eq!(state.active_model, "intentional-alternative");
+    }
+
+    #[test]
+    fn explicit_connection_keeps_same_named_models_separate() {
+        let directory = std::env::temp_dir().join(format!("quixi-routing-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let manager = ProviderManager::new(&directory);
+        manager.save_provider(&json!({"providerId":"custom","selectedModel":"shared","setAsActive":true}));
+        manager.save_provider(&json!({"providerId":"ollama","selectedModel":"shared","setAsActive":false}));
+        assert_eq!(manager.select_provider(Some("custom::shared"), true).unwrap().0, "custom");
+        assert_eq!(manager.select_provider(Some("ollama::shared"), true).unwrap().0, "ollama");
+        assert_eq!(manager.select_provider(Some("shared"), true).unwrap().0, "custom");
+        assert!(manager.select_provider(Some("missing::shared"), true).is_err());
+        manager.remember_models("custom", &["custom-model", "served-one"]);
+        assert_eq!(manager.select_provider(Some("custom::custom-model"), true).unwrap().2, "custom-model");
+        manager.remember_models("custom", &["served-one"]);
+        assert!(!manager.get_public_state()["providers"].as_array().unwrap().iter()
+            .find(|p|p["id"]=="custom").unwrap()["models"].as_array().unwrap()
+            .iter().any(|m|m["id"]=="custom-model"));
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn environment_credentials_preserve_precedence_and_provider_scope() {

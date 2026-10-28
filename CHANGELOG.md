@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.4.0 — 2026-10-28
+
+### Workspace usability
+- Add same-page navigation for analysis, saved evidence, investigations, reconstruction and advanced tools; collapse secondary setup and reconstruction controls by default.
+- Make Files and Task settings panels collapsible at desktop sizes with remembered preferences, and use dismissible overlays on narrow windows.
+- Keep the selected Agent model and Ask/Code mode visible beside task controls, with direct access to settings.
+- Put raw argument/schema editors behind explicit controls while retaining individual disclosures and revealing arguments required by a selected tool or validation error. Preserve technical tools, evidence and native-close protections.
+
+### Multi-artifact investigations
+- Save named, immutable sets of local files with SHA-256 identities, scoped to the current project. Inspect each file's current, changed, missing or unavailable state and its matching, excluded, failed and model-suggestion evidence counts.
+- Export staged, version-pinned evidence bundles with original saved records, raw-record hashes, exclusion reasons and explicit modules with no evidence. Recheck every artifact before publishing; refuse changed inputs, empty overall evidence or exceeded bounds without replacing earlier bundles.
+- Stream artifact hashes with per-file and aggregate limits, bound history scans, and reject ambiguous or reparse-based paths. Preserve the existing single-artifact analysis and reconstruction workflow.
+- Add desktop investigation controls and the project-scoped `studio_investigation` MCP tool. Deleting metadata requires explicit MCP confirmation and preserves source files, evidence and exported bundles.
+
+### Native window close
+- Negotiate native close requests with the editor: cancel, save and close, or close without saving. A failed or conflicting save leaves the editor open.
+- Warn about active backend work even when it was started outside the current UI; include synchronous commands and investigation operations.
+- Validate close request identities and reject stale or unsolicited replies. An unresponsive renderer falls back to a native confirmation that defaults to keeping the app open.
+
+### Verification
+- Add focused investigation integrity tests and a dedicated CI suite, plus genuine UI/MCP investigation and native-window-close smoke scripts.
+- Add an optimized source-known fixture with 2,304 generated functions and no application exports, COFF symbol table or debug directory. Its optional runtime baseline and real IDA paging/string-reference discovery report separate results; it is not a production-scale or general symbol-recovery benchmark.
+
+## 1.3.0 — 2026-10-28
+
+### Investigation integrity
+- Capture file artifact SHA-256 before and after analysis; retain changed-target failures and group history by artifact version.
+- Filter reconstruction dossiers and analysis briefs by verified file identity, explicitly recording legacy/different-version exclusions without deleting evidence.
+- Preserve runtime cancellation when analysis is serialized.
+
+### Runtime and agent reliability
+- Add persistent Ghidra memory, startup and call timeouts with validation, atomic writes and live server/version diagnostics.
+- Qualify model selection by provider, reconcile stale defaults, budget context conservatively and save investigation checkpoints without automatically replaying commands.
+
+### Behavioural verification
+- Add bounded file existence, SHA-256, exact text and structural JSON assertions, per-case timeouts and up to 256 cases within a two-hour planned budget.
+- Propagate oracle cancellation to child processes and add Stop checks for direct UI suites.
+- Show the actual nested oracle expectations before approval.
+
+### Validation
+- Include IDA, debugger, decompile and MCP unit coverage in CI with explicit passed/failed/ignored receipts.
+- Correct the UI oracle approval smoke sequence and add an optimized source-known C++ EXE/DLL benchmark with optional runtime baseline.
+- Mark licensed live tests explicitly ignored unless requested, then require their configured backend.
+
+
+
 The initial Windows edition includes a reconstruction workflow for selected features or staged application rebuilds, saved task handoff, evidence dossier export, and actionable guidance for PE resource ranges that are not file-backed.
 
 ## 1.2.0 — 2026-10-28

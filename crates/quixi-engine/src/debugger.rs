@@ -54,6 +54,9 @@ fn validate_call(tool: &str, args: &Value, read_only: bool) -> Result<()> {
 }
 
 impl DebuggerWorkspace {
+    /// Conservative, nonblocking snapshot for the native close confirmation.
+    pub fn is_busy(&self) -> bool { self.operation.try_lock().is_none() }
+
     /// A session cannot outlive the bridge that selected it.
     fn session_connected(&self) -> bool {
         let mut session = self.session.lock();
