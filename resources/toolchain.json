@@ -38,6 +38,28 @@
       "note": "Choose an existing REA-compatible IDA MCP JSON registration. Requires your licensed IDA installation; REA supports attached and headless profiles."
     },
     {
+      "id": "ida-headless",
+      "name": "IDA headless registration (idalib)",
+      "group": "Analysis core",
+      "source": "https://github.com/mrexodia/ida-pro-mcp",
+      "kind": "config",
+      "candidates": [
+        "rea-headless-registration.json"
+      ],
+      "note": "Created by Install-IDA-Bridge.ps1 for your licensed IDA Pro 9.x with idalib (ida-pro-mcp pinned to c133c385). Used by the live IDA bridge; Register for REA can also point REA's IDA provider at it. Starts disabled each app launch."
+    },
+    {
+      "id": "ida-bridge",
+      "name": "IDA idalib MCP server",
+      "group": "Analysis core",
+      "source": "https://github.com/mrexodia/ida-pro-mcp",
+      "kind": "config",
+      "candidates": [
+        "idalib-mcp.exe"
+      ],
+      "note": "The app-local idalib-mcp supervisor installed with the headless registration. Connected only while the IDA bridge is enabled."
+    },
+    {
       "id": "jadx",
       "name": "JADX",
       "group": "Mobile & apps",

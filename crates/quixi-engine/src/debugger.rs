@@ -54,8 +54,17 @@ fn validate_call(tool: &str, args: &Value, read_only: bool) -> Result<()> {
 }
 
 impl DebuggerWorkspace {
+    /// A session cannot outlive the bridge that selected it.
+    fn session_connected(&self) -> bool {
+        let mut session = self.session.lock();
+        if !self.plugin.connected() {
+            *session = false;
+        }
+        *session
+    }
     pub fn status(&self, engine: &QuixiEngine) -> Result<Value> {
-        Ok(json!({"connected":self.plugin.connected(), "sessionConnected":*self.session.lock(),
+        let session = self.session_connected();
+        Ok(json!({"connected":self.plugin.connected(), "sessionConnected":session,
             "server":crate::toolchain::path_for(engine,"x64dbg-bridge")?,
             "debugger":crate::toolchain::path_for(engine,"x64dbg")?,
             "tools":self.plugin.tools(false)}))
@@ -105,7 +114,7 @@ impl DebuggerWorkspace {
             "sessions" => self.plugin.call("list_sessions", json!({})),
             "start" | "attach" => {
                 let _guard = self.operation.lock();
-                if *self.session.lock() { bail!("Disable the bridge before selecting another debugger session. The existing debugger remains open."); }
+                if self.session_connected() { bail!("Disable the bridge before selecting another debugger session. The existing debugger remains open."); }
                 let (tool, args) = if route == "start" {
                     let target = engine.analysis.target.lock().clone();
                     let path = Path::new(&target);

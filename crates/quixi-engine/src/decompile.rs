@@ -1,4 +1,4 @@
-//! A separate text-completion specialist, driven by the main coding model.
+//! The optional Decompile helper: a text-completion LLM4Decompile model the Agent model (or the user) calls as a tool.
 use crate::QuixiEngine;
 use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
@@ -30,7 +30,7 @@ pub struct DecompileAssistant {
 fn validate(settings: &Settings) -> Result<()> {
     if !matches!(settings.profile.as_str(),"llm4-ref"|"llm4-end") { bail!("Choose LLM4Decompile Ref (pseudo-code) or End (assembly)"); }
     if !(1..=2048).contains(&settings.max_tokens) { bail!("Output tokens must be between 1 and 2048"); }
-    if settings.enabled && (settings.provider.trim().is_empty() || settings.model.trim().is_empty()) { bail!("Choose the specialist provider and its exact model ID"); }
+    if settings.enabled && (settings.provider.trim().is_empty() || settings.model.trim().is_empty()) { bail!("Choose the Decompile helper's connection and its exact model ID"); }
     Ok(())
 }
 pub fn prompt(input: &str) -> Result<String> {
@@ -52,7 +52,50 @@ fn extract(value: &Value, keys: &[&str], depth: usize) -> Option<String> {
         _ => None,
     }
 }
+/// Assembly text from an IDA `disasm` payload: a text field, or a `lines` array of strings or instruction objects.
+fn ida_assembly(value: &Value, depth: usize) -> Option<String> {
+    if depth>16 { return None; }
+    match value {
+        Value::Object(map) => {
+            for key in ["assembly","disassembly","disasm","asm","lines"] {
+                match map.get(key) {
+                    Some(Value::String(text)) if !text.trim().is_empty() => return Some(text.to_owned()),
+                    Some(Value::Array(lines)) => {
+                        let text:Vec<String>=lines.iter().filter_map(|l| match l {
+                            Value::String(s)=>Some(s.to_owned()),
+                            Value::Object(m)=>["instruction","disasm","text","line"].iter().find_map(|k|m.get(*k).and_then(Value::as_str)).map(str::to_owned),
+                            _=>None,
+                        }).collect();
+                        if !text.is_empty() { return Some(text.join("\n")); }
+                    }
+                    _ => {}
+                }
+            }
+            map.values().find_map(|v|ida_assembly(v,depth+1))
+        }
+        Value::Array(values) => values.iter().find_map(|v|ida_assembly(v,depth+1)),
+        _ => None,
+    }
+}
+/// IDA bridge records (provider "ida-bridge"): `decompile` gives Hex-Rays pseudocode for Ref, `disasm` gives assembly for End.
+fn input_from_ida(record: &Value, profile: &str) -> Result<String> {
+    let tool = record["tool"].as_str().unwrap_or("");
+    let (wanted, label) = if profile=="llm4-ref" { ("decompile","Hex-Rays pseudocode (IDA decompile)") } else { ("disasm","assembly (IDA disasm)") };
+    if tool!=wanted { bail!("This IDA record ({tool}) does not hold {label}, which the helper's {profile} model takes. Select an IDA {wanted} record, or change the helper's Model input."); }
+    let payload = quixi_mcp::rea::payload(&record["response"]);
+    let found = if profile=="llm4-ref" { extract(&payload,&["code","pseudocode","decompiled","decompiled_code"],0) } else { ida_assembly(&payload,0) };
+    // Older bridges return the code as plain text rather than JSON.
+    let text = found.or_else(|| Some(quixi_mcp::debugger::text_result(&record["response"])).filter(|t|!t.trim().is_empty() && serde_json::from_str::<Value>(t).is_err()));
+    text.context("The IDA record contains no function text. Re-run IDA decompile/disasm for one function, or provide the reviewed function text.")
+}
+/// Provenance note about how the record's representation differs from LLM4Decompile's training input.
+fn input_note(record: &Value) -> Option<&'static str> {
+    if record["provider"]!="ida-bridge" { return None; }
+    Some(if record["tool"]=="disasm" { "IDA disassembly syntax differs from the objdump-style assembly LLM4Decompile-End was trained on; review the suggestion against the IDA listing." }
+        else { "Hex-Rays pseudocode differs from the Ghidra pseudocode LLM4Decompile-Ref was trained on; review the suggestion against the IDA output." })
+}
 fn input_from_record(record: &Value, profile: &str) -> Result<String> {
+    if record["provider"]=="ida-bridge" { return input_from_ida(record,profile); }
     let response = quixi_mcp::rea::payload(&record["response"]);
     let keys: &[&str] = if profile=="llm4-ref" { &["pseudocode","pseudo_code","decompiled_code"] } else { &["assembly"] };
     if let Some(text) = extract(&response,keys,0) { return Ok(text); }
@@ -90,7 +133,8 @@ impl DecompileAssistant {
                 let _guard=self.operation.try_lock().context("Wait for the current specialist request to finish")?;
                 let settings: Settings=serde_json::from_value(body["settings"].clone())?;
                 validate(&settings)?;
-                if !engine.provider_manager.state.read().providers.iter().any(|p|p.id==settings.provider && p.api_format=="openai" && p.auth_mode!="oauth") { bail!("Choose an OpenAI-compatible provider in Providers first"); }
+                // Turning the helper off never depends on its connection still existing.
+                if settings.enabled && !engine.provider_manager.state.read().providers.iter().any(|p|p.id==settings.provider && p.configured && p.api_format=="openai" && p.auth_mode!="oauth") { bail!("Choose an OpenAI-compatible connection in Connections first"); }
                 fs::write(&self.path,serde_json::to_vec_pretty(&settings)?)?;
                 *self.settings.lock()=settings;
                 *self.last_success.lock()=None;
@@ -108,7 +152,7 @@ impl DecompileAssistant {
                 let id=body["recordId"].as_str().context("Select an evidence record")?;
                 let record=engine.analysis.read_record(id)?;
                 let profile=self.settings.lock().profile.clone();
-                Ok(json!({"recordId":id,"input":input_from_record(&record,&profile)?}))
+                Ok(json!({"recordId":id,"input":input_from_record(&record,&profile)?,"note":input_note(&record)}))
             }
             "assist" => self.assist(engine,body),
             _ => bail!("Unknown specialist operation"),
@@ -118,13 +162,13 @@ impl DecompileAssistant {
         let _guard=self.operation.try_lock().context("A specialist request is already running")?;
         let settings=self.settings.lock().clone();
         validate(&settings)?;
-        if !settings.enabled { bail!("Enable the decompilation specialist in Reverse engineering first"); }
+        if !settings.enabled { bail!("Enable the Decompile helper first (Models → Decompile helper → Set up)"); }
         let id=body["recordId"].as_str().context("Provide the source evidence record ID")?;
         let source=engine.analysis.read_record(id)?;
         if source["failed"]==true || source["kind"]=="model-suggestion" { bail!("Use a successful original analysis record as the source"); }
         let target=source["target"].as_str().context("Source record has no target")?;
         let selected=engine.analysis.target.lock().clone();
-        if selected.is_empty() || !target.eq_ignore_ascii_case(&selected) { bail!("Select the source record's artifact before requesting a suggestion"); }
+        if !crate::analysis::same_target(target, &selected) { bail!("Select the source record's artifact before requesting a suggestion"); }
         let supplied=body["input"].as_str().filter(|s|!s.trim().is_empty());
         let input=match supplied { Some(s)=>s.to_owned(),None=>input_from_record(&source,&settings.profile)? };
         let prompt=prompt(&input)?;
@@ -145,7 +189,7 @@ impl DecompileAssistant {
         }
         engine.analysis.save_external("llm4decompile","model-suggestion","decompile_assist",
             json!({"recordId":id,"provider":settings.provider,"model":settings.model,"profile":settings.profile,"maxTokens":settings.max_tokens}),target,response,
-            json!({"sourceRecordId":id,"input":input,"inputSha256":format!("{:x}",Sha256::digest(input.as_bytes())),"inputOrigin":if supplied.is_some(){"supplied-function"}else{"extracted-from-record"},"elapsedMs":started.elapsed().as_millis(),"verified":false}))
+            json!({"sourceRecordId":id,"input":input,"inputSha256":format!("{:x}",Sha256::digest(input.as_bytes())),"inputOrigin":if supplied.is_some(){"supplied-function"}else{"extracted-from-record"},"sourceProvider":source["provider"],"sourceTool":source["tool"],"inputNote":input_note(&source),"elapsedMs":started.elapsed().as_millis(),"verified":false}))
     }
 }
 
@@ -164,5 +208,29 @@ mod tests {
         assert!(input_from_record(&r,"llm4-end").is_err());
         assert!(validate(&Settings{enabled:true,..Settings::default()}).is_err());
         assert!(validate(&Settings{max_tokens:9000,..Settings::default()}).is_err());
+    }
+    #[test]
+    fn ida_decompile_records_feed_ref_with_a_hex_rays_note() {
+        let structured=json!({"provider":"ida-bridge","kind":"ida","tool":"decompile","response":{"content":[{"type":"text","text":"{\"addr\":\"0x401000\",\"code\":\"int main(void){return 0;}\"}"}],"structuredContent":{"addr":"0x401000","code":"int main(void){return 0;}"}}});
+        assert_eq!(input_from_record(&structured,"llm4-ref").unwrap(),"int main(void){return 0;}");
+        assert!(input_from_record(&structured,"llm4-end").unwrap_err().to_string().contains("IDA disasm"));
+        assert!(input_note(&structured).unwrap().contains("Hex-Rays pseudocode differs from the Ghidra pseudocode"));
+        // A batch result (list of functions) uses the first function; plain-text bridges are accepted as-is.
+        let batch=json!({"provider":"ida-bridge","tool":"decompile","response":{"content":[{"type":"text","text":"[{\"addr\":\"0x1\",\"code\":\"void a(void){}\"}]"}]}});
+        assert_eq!(input_from_record(&batch,"llm4-ref").unwrap(),"void a(void){}");
+        let plain=json!({"provider":"ida-bridge","tool":"decompile","response":{"content":[{"type":"text","text":"void b(void)\n{\n}"}]}});
+        assert_eq!(input_from_record(&plain,"llm4-ref").unwrap(),"void b(void)\n{\n}");
+        let empty=json!({"provider":"ida-bridge","tool":"decompile","response":{"structuredContent":{"addr":"0x1","error":"not a function"}}});
+        assert!(input_from_record(&empty,"llm4-ref").is_err());
+        assert_eq!(input_note(&json!({"provider":"rea","tool":"procedure_pseudo_code"})),None);
+    }
+    #[test]
+    fn ida_disasm_records_feed_end() {
+        let text=json!({"provider":"ida-bridge","tool":"disasm","response":{"structuredContent":{"addr":"0x401000","asm":{"name":"main","start_ea":"0x401000","lines":"push rbp\nmov rbp, rsp\nret"}}}});
+        assert_eq!(input_from_record(&text,"llm4-end").unwrap(),"push rbp\nmov rbp, rsp\nret");
+        assert!(input_from_record(&text,"llm4-ref").unwrap_err().to_string().contains("Hex-Rays pseudocode"));
+        let rows=json!({"provider":"ida-bridge","tool":"disasm","response":{"content":[{"type":"text","text":"{\"lines\":[{\"ea\":\"0x401000\",\"instruction\":\"push rbp\"},{\"ea\":\"0x401001\",\"instruction\":\"ret\"}]}"}]}});
+        assert_eq!(input_from_record(&rows,"llm4-end").unwrap(),"push rbp\nret");
+        assert!(input_note(&rows).unwrap().contains("LLM4Decompile-End"));
     }
 }

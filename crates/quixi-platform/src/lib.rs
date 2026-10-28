@@ -31,6 +31,8 @@ pub struct SafeFs;
 
 #[cfg(target_os = "windows")]
 mod windows;
+mod job;
+pub use job::ProcessJob;
 
 /// Stable writable workspace, independent of the developer's machine and process CWD.
 pub fn default_workspace() -> &'static str {
@@ -122,14 +124,46 @@ impl SafeFs {
         Ok(buf)
     }
 
+    /// Write `data` atomically: a temporary file in the target's directory is renamed over the
+    /// target, so readers and crashes see either the previous or the new complete file.
+    /// The save replaces the file rather than rewriting it in place: hard links to the old file
+    /// keep the old content, and a file another program holds open without delete sharing
+    /// cannot be replaced until that program closes it.
     pub fn write_file_beneath(root: &Path, rel_path: &Path, data: &[u8]) -> Result<()> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let target = Self::resolve_beneath(root, rel_path)?;
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut f = File::create(&target)?;
-        f.write_all(data)?;
-        Ok(())
+        // Re-check containment now that the parent directories exist.
+        let target = Self::resolve_beneath(root, rel_path)?;
+        if target.is_dir() {
+            bail!("SafeFs cannot replace a directory with a file: {}", target.display());
+        }
+        let parent = target.parent().context("SafeFs target has no parent directory")?;
+        let name = target.file_name().context("SafeFs target has no file name")?.to_string_lossy();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let temporary = parent.join(format!(
+            ".{name}.tmp-{}-{nanos}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = (|| -> Result<()> {
+            let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+            drop(f);
+            fs::rename(&temporary, &target)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result
     }
 
     /// Clones a file or directory using APFS copy-on-write (`clonefile`) on macOS, falling back to `fs::copy`.
@@ -2189,4 +2223,26 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn writes_beneath_root_are_atomic_replacements() {
+        let root = std::env::temp_dir().join(format!("quixi-atomic-safefs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("dir")).unwrap();
+        SafeFs::write_file_beneath(&root, Path::new("a/b.txt"), b"first").unwrap();
+        SafeFs::write_file_beneath(&root, Path::new("a/b.txt"), b"second, longer").unwrap();
+        SafeFs::write_file_beneath(&root, Path::new("a/empty.txt"), b"").unwrap();
+        assert_eq!(fs::read(root.join("a/b.txt")).unwrap(), b"second, longer");
+        assert_eq!(fs::read(root.join("a/empty.txt")).unwrap(), b"");
+        // A directory is never replaced and no temporary files remain.
+        assert!(SafeFs::write_file_beneath(&root, Path::new("dir"), b"x").is_err());
+        assert!(root.join("dir").is_dir());
+        assert!(SafeFs::write_file_beneath(&root, Path::new("../escape.txt"), b"x").is_err());
+        let leftovers = fs::read_dir(root.join("a"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(leftovers, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

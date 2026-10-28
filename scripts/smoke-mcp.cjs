@@ -41,7 +41,7 @@ async function mcpPort(){for(let i=0;i<20;i++){const probe=net.createServer();tr
     client=new Client({name:'rea-studio-integration-check',version});
     await client.connect(new StreamableHTTPClientTransport(new URL(config.url),{requestInit:{headers:config.headers}}));
     assert.equal(client.getServerVersion().name,'rea-studio');assert.equal(client.getServerVersion().version,version);
-    const catalog=await client.listTools();assert.equal(catalog.tools.length,24);
+    const catalog=await client.listTools();assert.equal(catalog.tools.length,27);
     const call=async(name,args={})=>{const r=await client.callTool({name,arguments:args});assert.equal(r.isError,false,JSON.stringify(r));return r.structuredContent || JSON.parse(r.content[0].text);};
     console.log('MCP check: official client connected');const state=await call('studio_state');assert(!JSON.stringify(state).includes(config.headers.Authorization));assert(!JSON.stringify(state).includes(key));
     const project=await call('studio_open_project',{path:root});

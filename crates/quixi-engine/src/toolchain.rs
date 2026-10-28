@@ -89,7 +89,8 @@ fn locate(engine: &QuixiEngine, item: &Value, configured: &Value) -> Option<Path
         .filter_map(Value::as_str)
         .collect();
     if let Some(path) = find_tool(
-        &engine.resources_dir.join("toolchain").join(id),
+        // The bridge executable lives inside the headless installer's folder.
+        &engine.resources_dir.join("toolchain").join(if id == "ida-bridge" { "ida-headless" } else { id }),
         &names,
         5,
         &mut 3000,
@@ -113,12 +114,13 @@ pub fn path_for(engine: &QuixiEngine, id: &str) -> Result<Option<String>> {
 pub fn sources(engine: &QuixiEngine) -> Result<Value> {
     let inventory = inventory(engine)?;
     let tools: Vec<Value> = inventory["tools"].as_array().into_iter().flatten()
-        .filter(|t|t["path"].is_string() && !matches!(t["kind"].as_str(),Some("reference"|"workflow")) && t["id"]!="x64dbg-bridge")
+        .filter(|t|t["path"].is_string() && !matches!(t["kind"].as_str(),Some("reference"|"workflow")) && t["id"]!="x64dbg-bridge" && t["id"]!="ida-bridge")
         .map(|t| {
             let id = t["id"].as_str().unwrap_or("");
             let integration = match id {
                 "rea" => "REA live catalog",
                 "ghidra" | "ida" => "REA native provider",
+                "ida-headless" => "Live IDA bridge",
                 "jadx-mcp" => "REA Android provider",
                 "x64dbg" if inventory["tools"].as_array().is_some_and(|ts|ts.iter().any(|v|v["id"]=="x64dbg-bridge" && v["path"].is_string())) => "Live debugger connection",
                 _ => "Import exported results",
@@ -159,6 +161,7 @@ pub fn inventory(engine: &QuixiEngine) -> Result<Value> {
             let connected=match id {
                 "rea"=>engine.rea.is_connected(),
                 "x64dbg"|"x64dbg-bridge"=>engine.debugger.plugin.connected(),
+                "ida-headless"|"ida-bridge"=>engine.ida.connected(),
                 "ghidra"|"ida"|"jadx-mcp"=>engine.rea.is_connected() && engine.analysis.provider_sessions.lock().get(id)==Some(&engine.rea.process_id()),
                 _=>false,
             };
@@ -188,11 +191,13 @@ pub fn handle(engine: &QuixiEngine, operation: &str, body: &Value) -> Result<Val
         .find(|t| t["id"] == id)
         .context("Unknown tool")?;
     if operation == "import-report" { return import_report(engine,id,body); }
-    if operation == "bridge-install-command" && id == "x64dbg-bridge" {
+    if operation == "bridge-install-command" && matches!(id, "x64dbg-bridge" | "ida-headless" | "ida-bridge") {
         let app = engine.resources_dir.parent().context("Missing application directory")?;
-        let release = app.join("Install-X64dbg-Bridge.ps1");
-        let script = if release.is_file() { release } else { app.join("scripts/install-x64dbg-bridge.ps1") };
-        if !script.is_file() { bail!("The x64dbg bridge setup script is missing"); }
+        let (release, source) = if id == "x64dbg-bridge" { ("Install-X64dbg-Bridge.ps1", "scripts/install-x64dbg-bridge.ps1") }
+            else { ("Install-IDA-Bridge.ps1", "scripts/install-ida-bridge.ps1") };
+        let release = app.join(release);
+        let script = if release.is_file() { release } else { app.join(source) };
+        if !script.is_file() { bail!("The bridge setup script is missing"); }
         let path = script.to_string_lossy().trim_start_matches("\\\\?\\").replace('\'', "''");
         return Ok(json!({"command":format!("& '{path}'")}));
     }

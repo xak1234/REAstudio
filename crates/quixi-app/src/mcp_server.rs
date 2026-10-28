@@ -508,23 +508,26 @@ fn tool_catalog() -> Vec<Value> {
         tool("studio_debugger_status","Inspect x64dbg bridge configuration and connection state. Enable and select the session from the desktop UI.",json!({}),&[],true),
         tool("studio_debugger_catalog","List the connected x64dbg tools, or return one live input schema. The desktop must enable the bridge first.",json!({"tool":string,"readOnly":boolean}),&[],true),
         tool("studio_debugger_call","Read or control the user-selected x64dbg session using a live schema. Checks the debuggee executable against the selected artifact and saves runtime evidence. Session selection and enablement stay in the desktop UI.",json!({"tool":string,"arguments":{"type":"object"}}),&["tool","arguments"],false),
+        tool("studio_ida_status","Inspect the IDA bridge (headless idalib or attached IDA): installation, connection, the bound artifact and SHA-256, and live tools with kind read/annotate/blocked. Provide tool for its live input schema (the bridge supplies database). Enabling and opening the artifact happen in the desktop UI.",json!({"tool":string}),&[],true),
+        tool("studio_ida_call","Call a live IDA tool on the database bound to the selected artifact. Read tools and (when allowed) annotations of the private IDA database only; code execution, patching, debugger and database-switching tools are refused. Saves evidence; long text is bounded with paging guidance.",json!({"tool":string,"arguments":{"type":"object"}}),&["tool","arguments"],false),
         tool("studio_state","List projects, configured model IDs and task summaries (no credentials).",json!({}),&[],true),
         tool("studio_open_project","Open an existing absolute project directory; returns its project ID.",json!({"path":string}),&["path"],false),
         tool("studio_import_code","Push UTF-8 source files into a new REA Studio project for the user. Returns project ID and analysisTarget. Import never executes code. Use studio_rea_select and static REA tools to analyse the returned target, or studio_start_run for coding assistance.",json!({"name":{"type":"string","minLength":1,"maxLength":80},"purpose":{"type":"string","enum":["coding","analysis"]},"analysisPath":{"type":"string","description":"Optional imported file/directory relative to the new project; defaults to its root."},"files":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}}}),&["name","files"],false),
         tool("studio_files","List project files, optionally filtered by query.",json!({"project":string,"query":string}),&["project"],true),
         tool("studio_read_file","Read a project-relative UTF-8 file and its conflict-detection hash.",json!({"project":string,"path":string}),&["project","path"],true),
         tool("studio_write_file","Write a project file using the hash returned by read; use empty hash only for new files.",json!({"project":string,"path":string,"content":string,"hash":string}),&["project","path","content","hash"],false),
-        tool("studio_diff","Read actual Git working-tree and staged diffs.",json!({"project":string}),&["project"],true),
+        tool("studio_diff","Read actual Git status and diffs: changed files with status, staged flag and line counts, plus working-tree and staged diffs bounded to 2 MiB each (truncated flag). Outside a Git repository the lists are empty.",json!({"project":string}),&["project"],true),
         tool("studio_command","Run a noninteractive command in a project as the Windows user. Output and timeout are bounded.",json!({"project":string,"command":string}),&["project","command"],false),
-        tool("studio_start_run","Start one model task. Poll studio_run_status for actual progress and results.",json!({"project":string,"prompt":string,"model":string,"mode":{"type":"string","enum":["ask","code"]},"reaEnabled":boolean}),&["project","prompt","model","mode"],false),
+        tool("studio_start_run","Start one model task. Poll studio_run_status for actual progress and results.",json!({"project":string,"prompt":string,"model":string,"mode":{"type":"string","enum":["ask","code"]},"reaEnabled":boolean,"maxSteps":{"type":"integer","minimum":1,"maximum":100,"description":"Model/tool step limit; default 40."},"contextBudget":{"type":"integer","minimum":50000,"maximum":2000000,"description":"Prompt history character budget; older results are compacted to references. Default 300000."},"maxOutputTokens":{"type":"integer","minimum":256,"maximum":128000,"description":"Model output token limit per step; default 16384."},"confirmCommands":{"type":"string","enum":["risky","all","never"],"description":"Which Code-mode agent commands wait for the user's approval in the REA Studio window (there is no MCP approval tool); default risky. While waiting, studio_run_status reports status awaiting_approval and pendingCommand."},"parentRun":{"type":"string","description":"Optional earlier task ID in the same project; its prompt, bounded answer and change list are given to this follow-up task."}}),&["project","prompt","model","mode"],false),
         tool("studio_run_status","Read a task's saved status, answer and actual activity.",json!({"id":string}),&["id"],true),
-        tool("studio_stop_run","Request cancellation after the current task request/tool completes.",json!({"id":string}),&["id"],false),
+        tool("studio_stop_run","Stop a task: aborts its in-flight model stream or shell command. An analysis operation already sent to REA/IDA may still finish in that provider.",json!({"id":string}),&["id"],false),
         tool("studio_rea_catalog","Connect REA and list static tool names/availability; provide tool for its full live input schema.",json!({"tool":string}),&[],true),
         tool("studio_rea_select","Select an existing absolute artifact path for static REA analysis.",json!({"path":string}),&["path"],false),
         tool("studio_rea_call","Call an advertised static REA tool with its exact live arguments. Saves real evidence.",json!({"tool":string,"arguments":{"type":"object"}}),&["tool","arguments"],false),
         tool("studio_rea_evidence","Read a saved evidence record by its UUID.",json!({"id":string}),&["id"],true),
         tool("studio_export_spec","Save a reconstruction dossier into a separate project using an optional completed brief.",json!({"project":string,"scope":{"type":"string","enum":["feature","application"]},"goal":string,"observations":string,"briefId":string}),&["project","scope","goal"],false),
-        tool("studio_oracle_run","Execute reviewed oracle commands in a project and save actual output comparisons.",json!({"project":string,"config":string}),&["project","config"],false),
+        tool("studio_oracle_preview","Read an oracle suite's cases, SHA-256 and whether the user has approved this exact file. Approval is only possible in the desktop UI.",json!({"project":string,"config":string}),&["project","config"],true),
+        tool("studio_oracle_run","Execute a user-approved oracle suite in a project and save actual output comparisons. Refused unless the user approved the file's current SHA-256 in the desktop UI; MCP clients cannot approve.",json!({"project":string,"config":string}),&["project","config"],false),
     ]
 }
 fn validate_arguments(schema: &Value, args: &Value) -> Result<()> {
@@ -547,6 +550,10 @@ fn validate_arguments(schema: &Value, args: &Value) -> Result<()> {
             Some("boolean") => value.is_boolean(),
             Some("object") => value.is_object(),
             Some("array") => value.is_array(),
+            Some("integer") => value.as_i64().is_some_and(|n| {
+                rule["minimum"].as_i64().is_none_or(|min| n >= min)
+                    && rule["maximum"].as_i64().is_none_or(|max| n <= max)
+            }),
             _ => false,
         };
         if !valid {
@@ -568,6 +575,7 @@ fn dispatch_tool(engine: &Arc<QuixiEngine>, name: &str, args: &Value) -> Result<
             | "studio_rea_call"
             | "studio_export_spec"
             | "studio_debugger_call"
+            | "studio_ida_call"
             | "studio_import_analysis"
             | "studio_decompile_assist"
     ) && state()?["runs"]
@@ -593,6 +601,15 @@ fn dispatch_tool(engine: &Arc<QuixiEngine>, name: &str, args: &Value) -> Result<
         "studio_debugger_call" => {
             return engine.debugger.call(engine,args["tool"].as_str().context("Tool required")?,
                 args["arguments"].clone(),false);
+        }
+        "studio_ida_status" => {
+            return Ok(match args["tool"].as_str() {
+                Some(tool) => engine.ida.catalog(engine, Some(tool)),
+                None => engine.ida.status(engine),
+            });
+        }
+        "studio_ida_call" => {
+            return engine.ida.agent_call(engine, args["tool"].as_str().context("Tool required")?, args["arguments"].clone());
         }
         "studio_state" => {
             let mut v = state()?;
@@ -663,6 +680,7 @@ fn dispatch_tool(engine: &Arc<QuixiEngine>, name: &str, args: &Value) -> Result<
         "studio_rea_select" => "rea/select",
         "studio_rea_evidence" => "rea/evidence",
         "studio_export_spec" => "reconstruction-export",
+        "studio_oracle_preview" => "oracle-preview",
         "studio_oracle_run" => {
             let mut body = args.clone();
             body["mode"] = json!("code");
@@ -716,5 +734,31 @@ mod tests {
         )
         .is_err());
         assert!(!tools.iter().any(|t| t["name"] == "studio_config"));
+    }
+    #[test]
+    fn ida_tools_are_exposed_with_exact_contracts() {
+        let tools = tool_catalog();
+        assert_eq!(tools.len(), 27);
+        assert!(!tools.iter().any(|t| t["name"].as_str().is_some_and(|n| n.contains("approve"))));
+        let run = tools.iter().find(|t| t["name"] == "studio_start_run").unwrap();
+        let base = json!({"project":"p","prompt":"t","model":"m","mode":"ask"});
+        let with = |k: &str, v: Value| { let mut a = base.clone(); a[k] = v; a };
+        assert!(validate_arguments(&run["inputSchema"], &with("maxSteps", json!(40))).is_ok());
+        assert!(validate_arguments(&run["inputSchema"], &with("maxSteps", json!(101))).is_err());
+        assert!(validate_arguments(&run["inputSchema"], &with("maxSteps", json!("40"))).is_err());
+        // The schema matches the backend clamps, so no value is silently changed.
+        assert!(validate_arguments(&run["inputSchema"], &with("contextBudget", json!(50_000))).is_ok());
+        assert!(validate_arguments(&run["inputSchema"], &with("contextBudget", json!(20_000))).is_err());
+        assert!(validate_arguments(&run["inputSchema"], &with("maxOutputTokens", json!(128_000))).is_ok());
+        assert!(validate_arguments(&run["inputSchema"], &with("maxOutputTokens", json!(200_000))).is_err());
+        assert!(validate_arguments(&run["inputSchema"], &with("confirmCommands", json!("all"))).is_ok());
+        assert!(validate_arguments(&run["inputSchema"], &with("confirmCommands", json!("sometimes"))).is_err());
+        assert!(validate_arguments(&run["inputSchema"], &with("parentRun", json!("run-id"))).is_ok());
+        let call = tools.iter().find(|t| t["name"] == "studio_ida_call").unwrap();
+        assert!(validate_arguments(&call["inputSchema"], &json!({"tool":"decompile"})).is_err());
+        assert!(validate_arguments(&call["inputSchema"], &json!({"tool":"decompile","arguments":{"addr":"main"}})).is_ok());
+        let status = tools.iter().find(|t| t["name"] == "studio_ida_status").unwrap();
+        assert_eq!(status["annotations"]["readOnlyHint"], true);
+        assert!(validate_arguments(&status["inputSchema"], &json!({})).is_ok());
     }
 }

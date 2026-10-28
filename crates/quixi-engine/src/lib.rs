@@ -1,6 +1,7 @@
 pub mod playground;
 pub mod analysis;
 pub mod debugger;
+pub mod ida;
 pub mod decompile;
 pub mod reconstruction;
 pub mod toolchain;
@@ -54,6 +55,7 @@ pub struct QuixiEngine {
     pub rea: Arc<quixi_mcp::rea::ReaPlugin>,
     pub analysis: analysis::AnalysisWorkspace,
     pub debugger: debugger::DebuggerWorkspace,
+    pub ida: ida::IdaWorkspace,
     pub decompile: decompile::DecompileAssistant,
     pub provider_manager: ProviderManager,
     pub user_locale: RwLock<String>,
@@ -171,6 +173,7 @@ impl QuixiEngine {
             resources_dir: resources_dir.clone(),
             analysis: analysis::AnalysisWorkspace::new(&data_dir),
             debugger: debugger::DebuggerWorkspace::default(),
+            ida: ida::IdaWorkspace::default(),
             decompile: decompile::DecompileAssistant::new(&data_dir),
             playground: playground::Playground::new(&data_dir),
             rea: rea.clone(),

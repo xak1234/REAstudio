@@ -2,6 +2,52 @@
 
 The initial Windows edition includes a reconstruction workflow for selected features or staged application rebuilds, saved task handoff, evidence dossier export, and actionable guidance for PE resource ranges that are not file-backed.
 
+## 1.2.0 — 2026-10-28
+
+### IDA Pro
+- Add `Install-IDA-Bridge.ps1`: app-local ida-pro-mcp pinned to commit c133c385 plus the licensed IDA's idalib, a headless REA registration and a version manifest. IDA's installation, plugins and other MCP clients are unchanged.
+- Add the IDA bridge (headless idalib or attached loopback GUI): live IDA tool schemas, identity binding to the selected artifact, a private persistent IDB per SHA-256, evidence records for every call, read/annotate/blocked tool classes (patching, Python evaluation, debugger and database-management tools are never exposed), automatic save after annotations, and Job Object ownership of its processes.
+- Expose the bridge in the Reverse engineering panel, to the coding agent (`ida_tools`/`ida` actions) and over MCP (`studio_ida_status`, `studio_ida_call`). Switch REA's own IDA provider between the headless registration and the previous attached registration.
+
+### Guided reverse engineering
+- Show workflow stages and the next required action or missing configuration from actual state and saved records, with inline prompts after each operation and prerequisite checks for quick actions.
+- Inventory filter and search, row actions for decompile/callers/callees/xrefs (REA or IDA), highlighted and navigable pseudocode with history, rename/comment, filtered history, lazy rendering of large results and an oracle review dialog.
+
+### Analysis sessions
+- A timed-out REA call is cancelled with `notifications/cancelled` instead of killing the session; the call timeout is configurable (`QUIXI_REA_CALL_TIMEOUT_SECS`, default 1800 s). Disconnect, close and runtime switch interrupt in-flight calls immediately.
+- Own REA, Ghidra/Java, idalib and command process trees with kill-on-close Job Objects. Skip stray non-JSON output lines instead of failing the session.
+- Attribute evidence to REA's actual open binary, close the previous binary on target change and canonicalize stored targets. Clear provider indicators only for that provider's failures. Index saved records instead of reparsing every record.
+- Correct the agent's REA tool set to the live 6.8.0 catalog (adds xrefs, batch_decompile, list_names, list_segments, resolve_containing_procedure, address context and session annotations) with a catalog test.
+- Paging and inventory views no longer save history records or reconnect REA (`persist:false`).
+
+### Agent and providers
+- Simplify model selection into Connections and two roles: one **Agent model** that runs every task and calls tools, and an optional **Decompile helper** (LLM4Decompile) that is one of those tools. The separate driving-model picker is removed; the helper's input type is detected from the model name and it accepts IDA bridge decompile/disasm records.
+- Configurable step limit (default 40, 1–100), output token limit (default 16384) and context budget; older results are compacted to references; new `edit`, `append` and `note` actions; malformed actions return to the model as errors.
+- Stop aborts the in-flight model stream or command. Read errors, idle timeouts and length stops are reported as failures instead of completed answers. HTTP errors show status and a redacted excerpt; 429/5xx are retried with backoff. No silent model substitution.
+- Oversized tool results are cut at JSON boundaries with retained-reference paging guidance. Atomic run/project writes; corrupt files are quarantined.
+- Risky agent commands (recursive/forced deletes, destructive Git operations, disk/boot/registry/policy/power commands, writes to system folders, download-and-execute, encoded/Base64 PowerShell, `Invoke-Expression` of dynamic content, piped or splatted deletes, clustered cmd switches such as `/s/q`, `Start-Process -Verb RunAs`) wait for the user's approval (`confirmCommands`: `risky` by default, `all`, `never`; `run-approve`/`run-deny` must name the pending `command`, otherwise "The pending command changed; review it again"; status `awaiting_approval` with `pendingCommand`). Denials reach the model as a tool result. MCP runs accept `confirmCommands` but cannot approve. The classifier is a pattern check, not a sandbox.
+- Per-run change sets: the first agent write/edit/append to a file snapshots its pre-image in application data; runs list `changes` with before/after hashes and a conflict flag, `run-diff` shows a unified diff and `run-revert` restores pre-images (deleting created files) unless the file changed since, or with `force`. Reverted files show a "reverted" badge, cannot be reverted again and are not offered for a forced revert. Commands' file changes are not tracked.
+- Follow-up tasks (`parentRun`) receive the earlier task's prompt, a bounded answer and its change list. Runs record `provider`, `startedAt`, `finishedAt` and `steps`.
+- Agent writes, edits and appends keep an existing file's CRLF line endings and UTF-8 BOM.
+- Saving a provider that needs a key no longer marks it configured without a resolvable credential (local/custom endpoints are unaffected). Detect local probes the configured base URL and keeps the selected model.
+
+### Coding workspace
+- Terminal commands stream output (`command-start`/`command-poll`/`command-stop`) in a Job Object with bounded head+tail buffers, up to 4 per project, and keep the working directory between commands while it stays inside the project. Agent and one-shot commands still start in the project root.
+- Prefer PowerShell 7 (`pwsh.exe`) over Windows PowerShell 5.1 and report the shell used. The command wrapper places the command on its own lines (a trailing `# comment` no longer breaks it) and takes the exit status from the last statement (a stale `$LASTEXITCODE` no longer fails a later successful statement).
+- Command output keeps the first 60% and the last 40% of its budget with an omission marker instead of only the beginning.
+- Git panel: changed files with status, staged flag and line counts from `git status -z`/numstat (spaces, Unicode and renames handled), per-file diffs including untracked files, stage, unstage, discard (with confirmation) and commit (repository hooks do not run: `core.hooksPath=NUL`, because an empty value resolves hooks to the drive root). Pathspecs naming `.git` at any depth, in any case or through an 8.3 alias are refused. Diffs are bounded to 2 MiB with a `truncated` flag; a folder without Git returns an empty panel instead of an error.
+- The editor reports `lineEnding` and `bom` and saves them back; creating a file over an existing path reports "File already exists"; empty new files can be created. `SafeFs` writes are atomic (temporary file and rename); a save replaces the file, so hard links are not preserved and a file held open without delete sharing cannot be replaced until it is closed. Files with mixed line endings are saved as LF, and the editor status says so.
+- The file explorer lists the whole tree (no depth limit; the 2000 limit counts files only, with `truncated`) and applies `.gitignore` in folders that are not Git repositories.
+
+### Reconstruction oracles
+- Oracle suites run only after the user approves their exact SHA-256 (`oracle-preview`/`oracle-approve`, `studio_oracle_preview`). Approval is a user consent step: the agent's file actions and the MCP file tools cannot record one, and the agent's write/edit/append actions refuse dossiers and oracle reports during implementation. Approvals are kept in application data, which cannot be opened as, inside or around a project. Commands that run with the user's shell permissions (Code-mode `command`, MCP `studio_command`) are not confined by this and are not a security boundary.
+- `argv`/`stdin` cases run programs directly with byte-exact comparison; a missing program fails a case.
+
+### Security
+- Skip Git integration for repositories whose own config defines command hooks, and harden every Git call (`core.fsmonitor=false`, no textconv/external diff, no optional locks).
+- Reject UNC and device paths from the model before any file-system access.
+- Make the legacy MCP host report real connection state and stop masking external failures.
+
 ## 1.1.1 — 2026-10-28
 
 - Give the current release an exact, distinct version in the window, HTML interface, MCP identity, README and package metadata.

@@ -1080,6 +1080,7 @@ impl ProviderManager {
         let mut st = self.state.write();
         let mut updated_model = String::new();
         let mut found = false;
+        let mut missing_credential = None;
 
         if let Some(entry) = st.providers.iter_mut().find(|p| p.id == provider_id) {
             found = true;
@@ -1135,11 +1136,25 @@ impl ProviderManager {
                     entry.selected_model = sm.to_string();
                 }
             }
-            entry.configured = true;
+            // A provider that needs a credential is configured only when one resolves
+            // (entered now, saved, OAuth or environment); local and custom endpoints need none.
+            if Self::needs_credential(entry) && Self::resolve_key(entry, "", &entry.base_url).0.is_empty() {
+                entry.configured = false;
+                missing_credential = Some(format!(
+                    "{} needs an API key. Enter one{}, then save again.",
+                    entry.name,
+                    match Self::environment_key_names(entry, &entry.base_url).as_slice() {
+                        [] => String::new(),
+                        names => format!(" or set {} and restart REA Studio", names.join(" or ")),
+                    }
+                ));
+            } else {
+                entry.configured = true;
+            }
             updated_model = entry.selected_model.clone();
         }
 
-        if found {
+        if found && missing_credential.is_none() {
             if body
                 .get("setAsActive")
                 .and_then(|v| v.as_bool())
@@ -1160,7 +1175,16 @@ impl ProviderManager {
         }
         drop(st);
         self.persist();
-        self.get_public_state()
+        let mut state = self.get_public_state();
+        if let Some(message) = missing_credential {
+            state["error"] = json!(message);
+        }
+        state
+    }
+
+    /// Whether requests to this provider need an API key or OAuth token.
+    fn needs_credential(entry: &ProviderEntry) -> bool {
+        entry.category != "local" && !matches!(entry.auth_mode.as_str(), "custom" | "local")
     }
 
     pub fn remove_provider(&self, body: &Value) -> Value {
@@ -1382,6 +1406,26 @@ impl ProviderManager {
         self.persist();
     }
 
+    /// Record a reachable local server. The user's chosen model is kept; only an empty choice,
+    /// or the catalog placeholder of a provider that was not configured yet and is not served,
+    /// is replaced by the first served model.
+    fn apply_detected(entry: &mut ProviderEntry, models: &[String]) {
+        let replace = entry.selected_model.trim().is_empty()
+            || (!entry.configured && !models.contains(&entry.selected_model));
+        entry.configured = true;
+        entry.last_tested_ok = Some(true);
+        if replace {
+            if let Some(first_model) = models.first() {
+                entry.selected_model = first_model.clone();
+            }
+        }
+        for mid in models {
+            if !entry.models.iter().any(|m| &m.id == mid) {
+                entry.models.insert(0, Self::model(mid, mid, entry.context_window, true, false));
+            }
+        }
+    }
+
     pub fn detect_local_servers(&self) -> Value {
         let targets = [
             ("ollama", "Ollama", "http://localhost:11434/v1/models"),
@@ -1396,11 +1440,22 @@ impl ProviderManager {
             .ok();
 
         let mut results = Vec::new();
-        for (id, name, url) in targets {
+        for (id, name, default_url) in targets {
+            // Probe the configured base URL (a changed port or host), not only the default.
+            let url = {
+                let st = self.state.read();
+                st.providers
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.base_url.trim().trim_end_matches('/'))
+                    .filter(|base| !base.is_empty())
+                    .map(|base| format!("{base}/models"))
+                    .unwrap_or_else(|| default_url.to_string())
+            };
             let mut reachable = false;
             let mut models = Vec::new();
             if let Some(ref http) = client {
-                if let Ok(resp) = http.get(url).send() {
+                if let Ok(resp) = http.get(&url).send() {
                     if resp.status().is_success() {
                         reachable = true;
                         if let Ok(val) = resp.json::<Value>() {
@@ -1418,22 +1473,11 @@ impl ProviderManager {
             if reachable {
                 let mut st = self.state.write();
                 if let Some(entry) = st.providers.iter_mut().find(|p| p.id == id) {
-                    entry.configured = true;
-                    entry.last_tested_ok = Some(true);
-                    if let Some(first_model) = models.first() {
-                        entry.selected_model = first_model.clone();
-                    }
-                    for mid in &models {
-                        if !entry.models.iter().any(|m| &m.id == mid) {
-                            entry.models.insert(
-                                0,
-                                Self::model(mid, mid, entry.context_window, true, false),
-                            );
-                        }
-                    }
+                    Self::apply_detected(entry, &models);
                 }
             }
             results.push(json!({
+                "url": url,
                 "id": id,
                 "name": name,
                 "reachable": reachable,
@@ -2046,6 +2090,7 @@ impl ProviderManager {
 
     /// Calls `https://chatgpt.com/backend-api/codex/responses` using the OpenAI Codex Responses SSE wire protocol,
     /// streaming each token delta in real time to `on_delta`.
+    #[allow(clippy::too_many_arguments)]
     fn call_codex_responses_streaming<F>(
         http: &reqwest::blocking::Client,
         access_token: &str,
@@ -2054,13 +2099,12 @@ impl ProviderManager {
         sys_prompt: &str,
         history: &[(String, String)],
         prompt: &str,
+        cancelled: &dyn Fn() -> bool,
         on_delta: &mut F,
-    ) -> Result<String, (u16, String)>
+    ) -> Result<String, CompletionError>
     where
         F: FnMut(&str),
     {
-        use std::io::{BufRead, BufReader};
-
         let mut input_items = Vec::new();
         for (role, text) in history {
             if text.trim().is_empty() {
@@ -2103,67 +2147,92 @@ impl ProviderManager {
             "stream": true
         });
 
-        let resp = http
-            .post("https://chatgpt.com/backend-api/codex/responses")
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("ChatGPT-Account-Id", account_id)
-            .header("originator", "codex_cli_rs")
-            .header("User-Agent", "codex_cli_rs/0.1.0")
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .json(&payload)
-            .send()
-            .map_err(|e| (0u16, format!("Network error calling Codex backend: {}", e)))?;
-
-        let status = resp.status().as_u16();
-        if !(200..300).contains(&status) {
-            let body_text = resp.text().unwrap_or_default();
-            return Err((status, body_text));
+        let resp = Self::send_with_retry(cancelled, || {
+            http.post("https://chatgpt.com/backend-api/codex/responses")
+                .header("Authorization", format!("Bearer {}", access_token))
+                .header("ChatGPT-Account-Id", account_id)
+                .header("originator", "codex_cli_rs")
+                .header("User-Agent", "codex_cli_rs/0.1.0")
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .json(&payload)
+                .send()
+        })?;
+        if !resp.status().is_success() {
+            return Err(Self::http_error(resp, &[access_token]));
         }
 
         let mut delta_acc = String::new();
         let mut completed_fallback = String::new();
-        let reader = BufReader::new(resp);
-
-        for line in reader.lines().map_while(Result::ok) {
-            let trimmed = line.trim();
-            if let Some(data_str) = trimmed.strip_prefix("data:") {
-                let data_str = data_str.trim();
-                if data_str.is_empty() || data_str == "[DONE]" {
-                    continue;
-                }
-                if let Ok(ev) = serde_json::from_str::<Value>(data_str) {
-                    let ev_type = ev.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    if ev_type == "response.output_text.delta" {
-                        if let Some(d) = ev.get("delta").and_then(|v| v.as_str()) {
-                            if !d.is_empty() {
-                                delta_acc.push_str(d);
-                                on_delta(d);
-                            }
+        let mut completed = false;
+        Self::read_stream(resp, cancelled, |line| {
+            let Some(data_str) = line.strip_prefix("data:").map(str::trim) else {
+                return Ok(());
+            };
+            if data_str.is_empty() || data_str == "[DONE]" {
+                return Ok(());
+            }
+            let Ok(ev) = serde_json::from_str::<Value>(data_str) else {
+                return Ok(());
+            };
+            match ev.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+                "response.output_text.delta" => {
+                    if let Some(d) = ev.get("delta").and_then(|v| v.as_str()) {
+                        if !d.is_empty() {
+                            delta_acc.push_str(d);
+                            on_delta(d);
                         }
-                    } else if ev_type == "response.completed" && delta_acc.is_empty() {
-                        if let Some(outputs) =
-                            ev.pointer("/response/output").and_then(|v| v.as_array())
+                    }
+                }
+                "response.completed" => {
+                    completed = true;
+                    if delta_acc.is_empty() {
+                        for item in ev
+                            .pointer("/response/output")
+                            .and_then(|v| v.as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter(|item| item.get("type").and_then(|v| v.as_str()) == Some("message"))
                         {
-                            for item in outputs {
-                                if item.get("type").and_then(|v| v.as_str()) == Some("message") {
-                                    if let Some(parts) =
-                                        item.get("content").and_then(|v| v.as_array())
-                                    {
-                                        for part in parts {
-                                            if let Some(t) =
-                                                part.get("text").and_then(|v| v.as_str())
-                                            {
-                                                completed_fallback.push_str(t);
-                                            }
-                                        }
-                                    }
+                            for part in item.get("content").and_then(|v| v.as_array()).into_iter().flatten() {
+                                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                                    completed_fallback.push_str(t);
                                 }
                             }
                         }
                     }
                 }
+                "response.incomplete" => {
+                    let reason = ev
+                        .pointer("/response/incomplete_details/reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    return Err(if reason.contains("max_output_tokens") {
+                        CompletionError::truncated(&delta_acc, None)
+                    } else {
+                        CompletionError::Stream(format!(
+                            "The provider stopped the response early ({reason})."
+                        ))
+                    });
+                }
+                "response.failed" | "error" => {
+                    let message = ev
+                        .pointer("/response/error/message")
+                        .or_else(|| ev.pointer("/error/message"))
+                        .or_else(|| ev.get("message"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unspecified error");
+                    return Err(CompletionError::Stream(format!(
+                        "The provider reported an error during the response: {}",
+                        Self::excerpt(message, &[access_token])
+                    )));
+                }
+                _ => {}
             }
+            Ok(())
+        })?;
+        if !completed {
+            return Err(CompletionError::ended_early());
         }
 
         let final_reply = if !delta_acc.trim().is_empty() {
@@ -2478,7 +2547,7 @@ impl ProviderManager {
     where
         F: FnMut(&str),
     {
-        self.try_completion_streaming(prompt, cwd, history, model_override, false, on_delta)
+        self.legacy_completion(prompt, cwd, history, model_override, false, on_delta)
     }
 
     /// Coding actions need valid JSON, including escaped Windows paths. Providers
@@ -2494,201 +2563,307 @@ impl ProviderManager {
     where
         F: FnMut(&str),
     {
-        self.try_completion_streaming(prompt, cwd, history, model_override, true, on_delta)
+        self.legacy_completion(prompt, cwd, history, model_override, true, on_delta)
     }
 
-    fn try_completion_streaming<F>(
+    fn legacy_completion<F>(
         &self,
         prompt: &str,
         cwd: &str,
         history: &[(String, String)],
         model_override: Option<&str>,
         json_mode: bool,
-        mut on_delta: F,
+        on_delta: F,
     ) -> Option<(String, String, String)>
     where
         F: FnMut(&str),
     {
-        use std::io::{BufRead, BufReader};
+        let request = CompletionRequest {
+            prompt,
+            cwd,
+            history,
+            model: model_override,
+            json_mode,
+            strict_model: false,
+            max_output_tokens: None,
+            cancelled: &|| false,
+        };
+        match self.complete(&request, on_delta) {
+            Ok(done) => Some((done.text, done.provider, done.model)),
+            // Chat callers display what arrived before the output limit; the agent loop does not.
+            Err(CompletionError::Truncated { partial, provider, model, .. })
+                if !partial.trim().is_empty() =>
+            {
+                Some((partial, provider, model))
+            }
+            Err(error) => {
+                tracing::warn!("Live completion failed: {error}");
+                None
+            }
+        }
+    }
 
-        let resolved_model = self.resolve_connected_model(model_override);
-        let (
-            provider_id,
-            provider_name,
-            mut model_id,
-            base_url,
-            api_format,
-            auth_mode,
-            mut credential,
-        ) = {
-            let st = self.state.read();
-            let entry = st
+    fn select_provider(
+        &self,
+        requested: Option<&str>,
+        strict: bool,
+    ) -> Result<SelectedProvider, CompletionError> {
+        let requested = requested.filter(|m| !m.trim().is_empty());
+        let resolved_model = match requested {
+            Some(model) if strict => model.to_string(),
+            _ => self.resolve_connected_model(requested),
+        };
+        let st = self.state.read();
+        let owns = |p: &ProviderEntry| {
+            p.configured
+                && (p.selected_model == resolved_model
+                    || p.models.iter().any(|m| m.id == resolved_model))
+        };
+        let owner = st
+            .providers
+            .iter()
+            .find(|p| p.id == st.active_provider && owns(p))
+            .or_else(|| {
+                st.providers.iter().find(|p| {
+                    p.configured
+                        && (p.selected_model == resolved_model
+                            || p.models.iter().any(|m| {
+                                m.id == resolved_model
+                                    && Self::is_model_available_for_provider(p, m)
+                            }))
+                })
+            });
+        let entry = match owner {
+            Some(entry) => entry,
+            None if strict => st.providers.iter().find(|p| owns(p)).ok_or_else(|| {
+                CompletionError::Unavailable(format!(
+                    "Model {resolved_model} is not offered by a configured provider. Choose a configured model; REA Studio does not substitute another model."
+                ))
+            })?,
+            None => st
                 .providers
                 .iter()
-                .find(|p| {
-                    p.id == st.active_provider
-                        && p.configured
-                        && (p.selected_model == resolved_model
-                            || p.models.iter().any(|m| m.id == resolved_model))
-                })
-                .or_else(|| {
-                    st.providers.iter().find(|p| {
-                        p.configured
-                            && (p.selected_model == resolved_model
-                                || p.models.iter().any(|m| {
-                                    m.id == resolved_model
-                                        && Self::is_model_available_for_provider(p, m)
-                                }))
-                    })
-                })
-                .or_else(|| {
-                    st.providers
-                        .iter()
-                        .find(|p| p.id == st.active_provider && p.configured)
-                })
-                .or_else(|| st.providers.iter().find(|p| p.configured))?;
-
-            let cred = Self::resolve_key(entry, "", &entry.base_url).0;
-
-            let chosen_model = if entry.models.iter().any(|m| m.id == resolved_model)
-                || entry.selected_model == resolved_model
-            {
-                resolved_model
-            } else {
-                entry.selected_model.clone()
-            };
-
-            (
-                entry.id.clone(),
-                entry.name.clone(),
-                chosen_model,
-                entry.base_url.trim_end_matches('/').to_string(),
-                entry.api_format.clone(),
-                entry.auth_mode.clone(),
-                cred,
-            )
+                .find(|p| p.id == st.active_provider && p.configured)
+                .or_else(|| st.providers.iter().find(|p| p.configured))
+                .ok_or_else(|| {
+                    CompletionError::Unavailable("No model provider is configured.".into())
+                })?,
         };
 
-        let http = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .ok()?;
-
-        let sys_prompt = format!(
-            "You are REA Studio, a native Rust AI desktop assistant and coding workspace agent. Active workspace: {}. Follow the tool protocol in the task instructions. Use supplied file contents and actual tool results as evidence. Read files before making claims about them; do not invent tool calls, tests or successful changes in {}.",
-            cwd, cwd
-        );
-
-        // 1. OpenAI Codex OAuth (`chatgpt.com/backend-api/codex/responses` SSE stream)
-        if provider_id == "openai"
-            && (auth_mode == "oauth" || Self::extract_chatgpt_account_id(&credential).is_some())
-            && !credential.starts_with("oauth_")
+        let cred = Self::resolve_key(entry, "", &entry.base_url).0;
+        let chosen_model = if entry.models.iter().any(|m| m.id == resolved_model)
+            || entry.selected_model == resolved_model
         {
-            if let Some(account_id) = Self::extract_chatgpt_account_id(&credential) {
-                match Self::call_codex_responses_streaming(
-                    &http,
-                    &credential,
-                    &account_id,
-                    &model_id,
-                    &sys_prompt,
-                    history,
-                    prompt,
-                    &mut on_delta,
-                ) {
-                    Ok(reply) if !reply.trim().is_empty() => {
-                        return Some((reply, provider_name, model_id));
+            resolved_model
+        } else {
+            entry.selected_model.clone()
+        };
+        Ok((
+            entry.id.clone(),
+            entry.name.clone(),
+            chosen_model,
+            entry.base_url.trim_end_matches('/').to_string(),
+            entry.api_format.clone(),
+            entry.auth_mode.clone(),
+            cred,
+        ))
+    }
+
+    /// Send a request, retrying HTTP 429 and 5xx with bounded exponential backoff that honours Retry-After.
+    fn send_with_retry(
+        cancelled: &dyn Fn() -> bool,
+        mut send: impl FnMut() -> reqwest::Result<reqwest::blocking::Response>,
+    ) -> Result<reqwest::blocking::Response, CompletionError> {
+        let mut attempt = 0u32;
+        loop {
+            if cancelled() {
+                return Err(CompletionError::Cancelled);
+            }
+            attempt += 1;
+            let response = send().map_err(|e| {
+                CompletionError::Network(format!(
+                    "Could not reach the provider: {}",
+                    e.without_url()
+                ))
+            })?;
+            let status = response.status().as_u16();
+            if (status == 429 || status >= 500) && attempt < PROVIDER_ATTEMPTS {
+                let wait = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .map(std::time::Duration::from_secs)
+                    .unwrap_or(std::time::Duration::from_secs(1 << (attempt - 1)))
+                    .min(std::time::Duration::from_secs(30));
+                drop(response);
+                let until = Instant::now() + wait;
+                while Instant::now() < until {
+                    if cancelled() {
+                        return Err(CompletionError::Cancelled);
                     }
-                    Err((status, err_body)) => {
-                        // On 401, refresh OAuth token and retry
-                        if status == 401 {
-                            if let Some(fresh_tok) = self.refresh_codex_token(&http) {
-                                credential = fresh_tok;
-                                if let Some(fresh_acct) =
-                                    Self::extract_chatgpt_account_id(&credential)
-                                {
-                                    if let Ok(reply) = Self::call_codex_responses_streaming(
-                                        &http,
-                                        &credential,
-                                        &fresh_acct,
-                                        &model_id,
-                                        &sys_prompt,
-                                        history,
-                                        prompt,
-                                        &mut on_delta,
-                                    ) {
-                                        if !reply.trim().is_empty() {
-                                            return Some((reply, provider_name, model_id));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // On 400 model_not_found / not supported, discover the account's live Codex models and retry immediately
-                        if status == 400
-                            && (err_body.contains("model_not_found")
-                                || err_body.contains("not supported"))
-                        {
-                            let live_models = Self::fetch_codex_models(&http, &credential);
-                            let fallback_model = live_models
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| "gpt-6.1-sol".to_string());
-                            {
-                                let mut st = self.state.write();
-                                if let Some(entry) =
-                                    st.providers.iter_mut().find(|p| p.id == "openai")
-                                {
-                                    for m_id in live_models.iter().rev() {
-                                        if !entry.models.iter().any(|m| &m.id == m_id) {
-                                            entry.models.insert(
-                                                0,
-                                                Self::model(
-                                                    m_id,
-                                                    &format!("{} (Codex OAuth)", m_id),
-                                                    entry.context_window,
-                                                    true,
-                                                    true,
-                                                ),
-                                            );
-                                        }
-                                    }
-                                    entry.selected_model = fallback_model.clone();
-                                }
-                                if st.active_provider == "openai" {
-                                    st.active_model = fallback_model.clone();
-                                }
-                            }
-                            self.persist();
-                            model_id = fallback_model;
-                            if let Ok(reply) = Self::call_codex_responses_streaming(
-                                &http,
-                                &credential,
-                                &account_id,
-                                &model_id,
-                                &sys_prompt,
-                                history,
-                                prompt,
-                                &mut on_delta,
-                            ) {
-                                if !reply.trim().is_empty() {
-                                    return Some((reply, provider_name, model_id));
-                                }
-                            }
-                        }
-                        tracing::warn!(
-                            "Codex OAuth completion error (HTTP {}): {}",
-                            status,
-                            err_body
-                        );
-                    }
-                    _ => {}
+                    std::thread::sleep(
+                        until
+                            .saturating_duration_since(Instant::now())
+                            .min(std::time::Duration::from_millis(100)),
+                    );
+                }
+                continue;
+            }
+            return Ok(response);
+        }
+    }
+
+    /// A bounded, single-line excerpt with credentials and key-like tokens removed.
+    fn excerpt(text: &str, secrets: &[&str]) -> String {
+        let mut text = text.to_string();
+        for secret in secrets.iter().filter(|s| s.len() >= 6) {
+            text = text.replace(secret, "[redacted]");
+        }
+        let mut masked = String::new();
+        let mut rest = text.as_str();
+        while let Some(index) = rest.find("sk-") {
+            masked.push_str(&rest[..index + 3]);
+            let tail = &rest[index + 3..];
+            let end = tail
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .unwrap_or(tail.len());
+            if end > 0 {
+                masked.push_str("[redacted]");
+            }
+            rest = &tail[end..];
+        }
+        masked.push_str(rest);
+        let single = masked.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut bounded: String = single.chars().take(600).collect();
+        if single.chars().count() > 600 {
+            bounded.push('…');
+        }
+        bounded
+    }
+
+    fn http_error(response: reqwest::blocking::Response, secrets: &[&str]) -> CompletionError {
+        use std::io::Read;
+        let status = response.status().as_u16();
+        let mut body = Vec::new();
+        let _ = response.take(16 * 1024).read_to_end(&mut body);
+        CompletionError::Http {
+            status,
+            excerpt: Self::excerpt(&String::from_utf8_lossy(&body), secrets),
+        }
+    }
+
+    /// Feed each stream line to `handle`. A read error (including the idle timeout) is a failure.
+    fn read_stream(
+        response: reqwest::blocking::Response,
+        cancelled: &dyn Fn() -> bool,
+        mut handle: impl FnMut(&str) -> Result<(), CompletionError>,
+    ) -> Result<(), CompletionError> {
+        use std::io::{BufRead, BufReader};
+        let mut reader = BufReader::new(response);
+        let mut line = Vec::new();
+        loop {
+            if cancelled() {
+                return Err(CompletionError::Cancelled);
+            }
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) => return Ok(()),
+                Ok(_) => handle(String::from_utf8_lossy(&line).trim())?,
+                Err(error) => {
+                    return Err(CompletionError::Stream(format!(
+                        "The provider stream failed before the response completed ({error}); the partial output was discarded."
+                    )))
                 }
             }
         }
+    }
 
-        // 2. Anthropic Messages API (`/v1/messages` with `"stream": true`)
-        if api_format == "anthropic" && !credential.is_empty() && !credential.starts_with("oauth_")
-        {
+    /// Streams one completion from the provider that owns `request.model`. Unlike the legacy
+    /// `try_live_*` helpers this reports why a request failed and never treats a cut-off
+    /// stream as a complete answer.
+    pub fn complete<F>(
+        &self,
+        request: &CompletionRequest,
+        mut on_delta: F,
+    ) -> Result<Completion, CompletionError>
+    where
+        F: FnMut(&str),
+    {
+        let cancelled = request.cancelled;
+        let (provider_id, provider_name, model_id, base_url, api_format, auth_mode, mut credential) =
+            self.select_provider(request.model, request.strict_model)?;
+        let (prompt, history) = (request.prompt, request.history);
+
+        // In blocking reqwest this bounds the wait for response headers and for each body
+        // read, not the whole response, so long generations keep streaming.
+        let http = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(PROVIDER_IDLE_TIMEOUT)
+            .build()
+            .map_err(|e| CompletionError::Network(format!("Could not create the HTTP client: {e}")))?;
+
+        let sys_prompt = format!(
+            "You are REA Studio, a native Rust AI desktop assistant and coding workspace agent. Active workspace: {}. Follow the tool protocol in the task instructions. Use supplied file contents and actual tool results as evidence. Read files before making claims about them; do not invent tool calls, tests or successful changes in {}.",
+            request.cwd, request.cwd
+        );
+
+        let codex_account = (provider_id == "openai"
+            && (auth_mode == "oauth" || Self::extract_chatgpt_account_id(&credential).is_some())
+            && !credential.starts_with("oauth_"))
+        .then(|| Self::extract_chatgpt_account_id(&credential))
+        .flatten();
+
+        let outcome = if let Some(account_id) = codex_account {
+            // 1. OpenAI Codex OAuth (`chatgpt.com/backend-api/codex/responses` SSE stream)
+            let mut result = Self::call_codex_responses_streaming(
+                &http, &credential, &account_id, &model_id, &sys_prompt, history, prompt,
+                cancelled, &mut on_delta,
+            );
+            if matches!(result, Err(CompletionError::Http { status: 401, .. })) {
+                if let Some(fresh) = self.refresh_codex_token(&http) {
+                    if let Some(fresh_account) = Self::extract_chatgpt_account_id(&fresh) {
+                        credential = fresh;
+                        result = Self::call_codex_responses_streaming(
+                            &http, &credential, &fresh_account, &model_id, &sys_prompt,
+                            history, prompt, cancelled, &mut on_delta,
+                        );
+                    }
+                }
+            }
+            if let Err(CompletionError::Http { status: 400, excerpt }) = &result {
+                if excerpt.contains("model_not_found") || excerpt.contains("not supported") {
+                    // Record the account's live models, but never change the saved selection.
+                    let live_models = Self::fetch_codex_models(&http, &credential);
+                    if !live_models.is_empty() {
+                        {
+                            let mut st = self.state.write();
+                            if let Some(entry) = st.providers.iter_mut().find(|p| p.id == "openai") {
+                                for m_id in live_models.iter().rev() {
+                                    if !entry.models.iter().any(|m| &m.id == m_id) {
+                                        let model = Self::model(
+                                            m_id,
+                                            &format!("{} (Codex OAuth)", m_id),
+                                            entry.context_window,
+                                            true,
+                                            true,
+                                        );
+                                        entry.models.insert(0, model);
+                                    }
+                                }
+                            }
+                        }
+                        self.persist();
+                    }
+                    result = Err(CompletionError::Unavailable(format!(
+                        "Codex rejected model {model_id} for this account (HTTP 400: {excerpt}). Models it offers: {}. Choose one explicitly; REA Studio does not switch models automatically.",
+                        if live_models.is_empty() { "none listed".to_string() } else { live_models.join(", ") }
+                    )));
+                }
+            }
+            result
+        } else if api_format == "anthropic" && !credential.is_empty() && !credential.starts_with("oauth_") {
+            // 2. Anthropic Messages API (`/v1/messages` with `"stream": true`)
             let url = format!("{}/messages", base_url);
             let mut msgs = Vec::new();
             for (role, text) in history {
@@ -2707,65 +2882,111 @@ impl ProviderManager {
             {
                 msgs.push(json!({ "role": "user", "content": prompt }));
             }
-            let resp = http
-                .post(&url)
-                .header("x-api-key", &credential)
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json")
-                .header("accept", "text/event-stream")
-                .json(&json!({
-                    "model": model_id,
-                    "max_tokens": 4096,
-                    "system": sys_prompt,
-                    "messages": msgs,
-                    "stream": true
-                }))
-                .send()
-                .ok()?;
-
-            if resp.status().is_success() {
-                let mut acc = String::new();
-                let reader = BufReader::new(resp);
-                for line in reader.lines().map_while(Result::ok) {
-                    let trimmed = line.trim();
-                    if let Some(data_str) = trimmed.strip_prefix("data:") {
+            let send = |limit: u32| {
+                Self::send_with_retry(cancelled, || {
+                    http.post(&url)
+                        .header("x-api-key", &credential)
+                        .header("anthropic-version", "2023-06-01")
+                        .header("content-type", "application/json")
+                        .header("accept", "text/event-stream")
+                        .json(&json!({
+                            "model": model_id,
+                            "max_tokens": limit,
+                            "system": sys_prompt,
+                            "messages": msgs,
+                            "stream": true
+                        }))
+                        .send()
+                })
+            };
+            let mut limit = request.max_output_tokens.unwrap_or_else(default_max_output_tokens);
+            let mut resp = send(limit)?;
+            if resp.status().as_u16() == 400 {
+                // Older models accept fewer output tokens; clamp once to the limit the API states.
+                match Self::http_error(resp, &[&credential]) {
+                    CompletionError::Http { excerpt, .. } if excerpt.contains("max_tokens") => {
+                        limit = excerpt
+                            .split("> ")
+                            .nth(1)
+                            .and_then(|tail| {
+                                tail.split(|c: char| !c.is_ascii_digit()).next()?.parse::<u32>().ok()
+                            })
+                            .filter(|stated| *stated > 0 && *stated < limit)
+                            .unwrap_or(4096);
+                        resp = send(limit)?;
+                    }
+                    error => return Err(error.with_origin(&provider_name, &model_id)),
+                }
+            }
+            if !resp.status().is_success() {
+                Err(Self::http_error(resp, &[&credential]))
+            } else {
+                let (mut acc, mut stop_reason, mut completed) = (String::new(), None::<String>, false);
+                Self::read_stream(resp, cancelled, |trimmed| {
+                    let body = if let Some(data_str) = trimmed.strip_prefix("data:") {
                         let data_str = data_str.trim();
                         if data_str.is_empty() || data_str == "[DONE]" {
-                            continue;
+                            return Ok(());
                         }
-                        if let Ok(ev) = serde_json::from_str::<Value>(data_str) {
-                            if ev.get("type").and_then(|v| v.as_str())
-                                == Some("content_block_delta")
+                        data_str
+                    } else if trimmed.starts_with('{') {
+                        trimmed
+                    } else {
+                        return Ok(());
+                    };
+                    let Ok(ev) = serde_json::from_str::<Value>(body) else {
+                        return Ok(());
+                    };
+                    match ev.get("type").and_then(|v| v.as_str()) {
+                        Some("content_block_delta") => {
+                            if let Some(d) = ev
+                                .pointer("/delta/text")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
                             {
-                                if let Some(d) = ev
-                                    .pointer("/delta/text")
-                                    .and_then(|v| v.as_str())
-                                    .filter(|s| !s.is_empty())
-                                {
-                                    acc.push_str(d);
-                                    on_delta(d);
-                                }
-                            } else if let Some(text) =
-                                ev.pointer("/content/0/text").and_then(|v| v.as_str())
-                            {
-                                acc.push_str(text);
-                                on_delta(text);
+                                acc.push_str(d);
+                                on_delta(d);
                             }
                         }
-                    } else if trimmed.starts_with('{') {
-                        if let Ok(body) = serde_json::from_str::<Value>(trimmed) {
-                            if let Some(text) =
-                                body.pointer("/content/0/text").and_then(|t| t.as_str())
-                            {
+                        Some("message_delta") => {
+                            if let Some(reason) = ev.pointer("/delta/stop_reason").and_then(|v| v.as_str()) {
+                                stop_reason = Some(reason.to_string());
+                            }
+                        }
+                        Some("message_stop") => completed = true,
+                        Some("error") => {
+                            let message = ev
+                                .pointer("/error/message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unspecified error");
+                            return Err(CompletionError::Stream(format!(
+                                "The provider reported an error during the response: {}",
+                                Self::excerpt(message, &[&credential])
+                            )));
+                        }
+                        _ => {
+                            // A complete non-streamed message body.
+                            if let Some(text) = ev.pointer("/content/0/text").and_then(|v| v.as_str()) {
                                 acc.push_str(text);
                                 on_delta(text);
+                                if let Some(reason) = ev.get("stop_reason").and_then(|v| v.as_str()) {
+                                    stop_reason = Some(reason.to_string());
+                                    completed = true;
+                                }
                             }
                         }
                     }
-                }
-                if !acc.trim().is_empty() {
-                    return Some((acc, provider_name, model_id));
-                }
+                    Ok(())
+                })
+                .and_then(|()| {
+                    if stop_reason.as_deref() == Some("max_tokens") {
+                        Err(CompletionError::truncated(&acc, Some(limit)))
+                    } else if !completed {
+                        Err(CompletionError::ended_early())
+                    } else {
+                        Ok(acc)
+                    }
+                })
             }
         } else if !base_url.is_empty()
             && (!credential.is_empty() || auth_mode == "local" || provider_id == "custom")
@@ -2773,18 +2994,6 @@ impl ProviderManager {
         {
             // 3. OpenAI-Compatible Chat Completions API (`/v1/chat/completions` with `"stream": true`)
             let url = format!("{}/chat/completions", base_url);
-            let mut req = http
-                .post(&url)
-                .header("content-type", "application/json")
-                .header("accept", "text/event-stream");
-            if !credential.is_empty() {
-                req = req.header("Authorization", format!("Bearer {}", credential));
-            }
-            if provider_id == "openrouter" {
-                req = req
-                    .header("HTTP-Referer", "https://quixidesk.local")
-                    .header("X-Title", "REA Studio");
-            }
             let mut msgs = vec![json!({ "role": "system", "content": sys_prompt })];
             for (role, text) in history {
                 if !text.trim().is_empty() {
@@ -2802,75 +3011,228 @@ impl ProviderManager {
             {
                 msgs.push(json!({ "role": "user", "content": prompt }));
             }
-            let mut payload = json!({"model":model_id,"messages":msgs,"stream":true});
-            if json_mode {
-                payload["response_format"] = json!({"type":"json_object"});
-            }
-            let retry = req.try_clone();
-            let mut response = req.json(&payload).send();
-            if json_mode
-                && response
-                    .as_ref()
-                    .map(|r| r.status().as_u16() == 400 || r.status().as_u16() == 422)
-                    .unwrap_or(false)
-            {
-                if let Some(retry) = retry {
-                    payload.as_object_mut().unwrap().remove("response_format");
-                    response = retry.json(&payload).send();
+            // Only send an output limit that was asked for: some endpoints reject `max_tokens`.
+            let limit = request.max_output_tokens.or_else(configured_max_output_tokens);
+            let payload = |json_mode: bool| {
+                let mut payload = json!({"model":model_id,"messages":msgs,"stream":true});
+                if json_mode {
+                    payload["response_format"] = json!({"type":"json_object"});
                 }
+                if let Some(limit) = limit {
+                    payload["max_tokens"] = json!(limit);
+                }
+                payload
+            };
+            let post = |payload: &Value| {
+                Self::send_with_retry(cancelled, || {
+                    let mut req = http
+                        .post(&url)
+                        .header("content-type", "application/json")
+                        .header("accept", "text/event-stream");
+                    if !credential.is_empty() {
+                        req = req.header("Authorization", format!("Bearer {}", credential));
+                    }
+                    if provider_id == "openrouter" {
+                        req = req
+                            .header("HTTP-Referer", "https://quixidesk.local")
+                            .header("X-Title", "REA Studio");
+                    }
+                    req.json(payload).send()
+                })
+            };
+            let mut resp = post(&payload(request.json_mode))?;
+            if request.json_mode && matches!(resp.status().as_u16(), 400 | 422) {
+                resp = post(&payload(false))?;
             }
-            if let Ok(resp) = response {
-                if resp.status().is_success() {
-                    let mut acc = String::new();
-                    let reader = BufReader::new(resp);
-                    for line in reader.lines().map_while(Result::ok) {
-                        let trimmed = line.trim();
-                        if let Some(data_str) = trimmed.strip_prefix("data:") {
-                            let data_str = data_str.trim();
-                            if data_str.is_empty() || data_str == "[DONE]" {
-                                continue;
-                            }
-                            if let Ok(ev) = serde_json::from_str::<Value>(data_str) {
-                                if let Some(d) = ev
-                                    .pointer("/choices/0/delta/content")
-                                    .and_then(|v| v.as_str())
-                                    .filter(|s| !s.is_empty())
-                                {
-                                    acc.push_str(d);
-                                    on_delta(d);
-                                } else if let Some(t) = ev
-                                    .pointer("/choices/0/message/content")
-                                    .and_then(|v| v.as_str())
-                                    .filter(|s| !s.is_empty())
-                                {
-                                    acc.push_str(t);
-                                    on_delta(t);
-                                }
-                            }
-                        } else if trimmed.starts_with('{') {
-                            if let Ok(body) = serde_json::from_str::<Value>(trimmed) {
-                                if let Some(t) = body
-                                    .pointer("/choices/0/message/content")
-                                    .and_then(|v| v.as_str())
-                                    .filter(|s| !s.is_empty())
-                                {
-                                    acc.push_str(t);
-                                    on_delta(t);
-                                }
-                            }
+            if !resp.status().is_success() {
+                Err(Self::http_error(resp, &[&credential]))
+            } else {
+                let (mut acc, mut finish, mut done) = (String::new(), None::<String>, false);
+                Self::read_stream(resp, cancelled, |trimmed| {
+                    let (body, whole) = if let Some(data_str) = trimmed.strip_prefix("data:") {
+                        let data_str = data_str.trim();
+                        if data_str == "[DONE]" {
+                            done = true;
+                            return Ok(());
                         }
+                        (data_str, false)
+                    } else if trimmed.starts_with('{') {
+                        (trimmed, true)
+                    } else {
+                        return Ok(());
+                    };
+                    let Ok(ev) = serde_json::from_str::<Value>(body) else {
+                        return Ok(());
+                    };
+                    if let Some(error) = ev.get("error").filter(|e| !e.is_null()) {
+                        let message = error
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| error.to_string());
+                        return Err(CompletionError::Stream(format!(
+                            "The provider reported an error during the response: {}",
+                            Self::excerpt(&message, &[&credential])
+                        )));
                     }
-                    if !acc.trim().is_empty() {
-                        return Some((acc, provider_name, model_id));
+                    if let Some(d) = ev
+                        .pointer("/choices/0/delta/content")
+                        .or_else(|| ev.pointer("/choices/0/message/content"))
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                    {
+                        acc.push_str(d);
+                        on_delta(d);
                     }
-                }
+                    if let Some(reason) = ev.pointer("/choices/0/finish_reason").and_then(|v| v.as_str()) {
+                        finish = Some(reason.to_string());
+                    }
+                    done |= whole;
+                    Ok(())
+                })
+                .and_then(|()| {
+                    if finish.as_deref() == Some("length") {
+                        Err(CompletionError::truncated(&acc, limit))
+                    } else if !done && finish.is_none() {
+                        Err(CompletionError::ended_early())
+                    } else {
+                        Ok(acc)
+                    }
+                })
             }
-        }
+        } else {
+            Err(CompletionError::Unavailable(format!(
+                "{provider_name} has no usable credential or API base URL."
+            )))
+        };
 
+        let text = outcome.map_err(|e| e.with_origin(&provider_name, &model_id))?;
         // An HTTP error or an empty stream is not a successful completion.
-        None
+        if text.trim().is_empty() {
+            return Err(CompletionError::Empty);
+        }
+        Ok(Completion {
+            text,
+            provider: provider_name,
+            model: model_id,
+        })
     }
 }
+
+/// (provider id, provider name, model, base URL, API format, auth mode, credential)
+type SelectedProvider = (String, String, String, String, String, String, String);
+
+/// Requests wait at most this long for response headers or for the next streamed bytes.
+const PROVIDER_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+/// Attempts per request when the provider answers HTTP 429 or 5xx.
+const PROVIDER_ATTEMPTS: u32 = 3;
+const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16_384;
+
+/// `QUIXI_MAX_OUTPUT_TOKENS`, when set to a usable value.
+fn configured_max_output_tokens() -> Option<u32> {
+    std::env::var("QUIXI_MAX_OUTPUT_TOKENS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .map(|v| v.clamp(256, 128_000))
+}
+
+/// Output-token limit for providers that require one.
+pub fn default_max_output_tokens() -> u32 {
+    configured_max_output_tokens().unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+}
+
+/// One completion request for `ProviderManager::complete`.
+pub struct CompletionRequest<'a> {
+    pub prompt: &'a str,
+    pub cwd: &'a str,
+    pub history: &'a [(String, String)],
+    pub model: Option<&'a str>,
+    /// Ask OpenAI-compatible endpoints for a JSON object response.
+    pub json_mode: bool,
+    /// Fail instead of substituting another model when `model` is not configured.
+    pub strict_model: bool,
+    pub max_output_tokens: Option<u32>,
+    /// Polled between stream reads and retries; true aborts the request.
+    pub cancelled: &'a dyn Fn() -> bool,
+}
+
+pub struct Completion {
+    pub text: String,
+    pub provider: String,
+    /// The model that actually produced the answer.
+    pub model: String,
+}
+
+#[derive(Debug)]
+pub enum CompletionError {
+    Unavailable(String),
+    Http { status: u16, excerpt: String },
+    Network(String),
+    Stream(String),
+    /// The model stopped at its output-token limit. `partial` is what arrived before it.
+    Truncated {
+        partial: String,
+        provider: String,
+        model: String,
+        limit: Option<u32>,
+    },
+    Cancelled,
+    Empty,
+}
+
+impl CompletionError {
+    fn truncated(partial: &str, limit: Option<u32>) -> Self {
+        Self::Truncated {
+            partial: partial.to_string(),
+            provider: String::new(),
+            model: String::new(),
+            limit,
+        }
+    }
+
+    fn ended_early() -> Self {
+        Self::Stream("The provider stream ended before the response completed (connection closed or interrupted); the partial output was discarded.".into())
+    }
+
+    fn with_origin(self, provider_name: &str, model_id: &str) -> Self {
+        match self {
+            Self::Truncated { partial, limit, .. } => Self::Truncated {
+                partial,
+                provider: provider_name.to_string(),
+                model: model_id.to_string(),
+                limit,
+            },
+            other => other,
+        }
+    }
+}
+
+impl std::fmt::Display for CompletionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable(message) | Self::Network(message) | Self::Stream(message) => {
+                f.write_str(message)
+            }
+            Self::Http { status, excerpt } if excerpt.is_empty() => {
+                write!(f, "The provider returned HTTP {status} with no error details.")
+            }
+            Self::Http { status, excerpt } => {
+                write!(f, "The provider returned HTTP {status}: {excerpt}")
+            }
+            Self::Truncated { limit: Some(limit), .. } => write!(
+                f,
+                "The model's output was cut off at its output limit ({limit} tokens) before the response completed."
+            ),
+            Self::Truncated { .. } => f.write_str(
+                "The model's output was cut off at its output limit before the response completed.",
+            ),
+            Self::Cancelled => f.write_str("The request was cancelled."),
+            Self::Empty => f.write_str("The provider returned an empty answer."),
+        }
+    }
+}
+
+impl std::error::Error for CompletionError {}
 
 #[cfg(test)]
 mod tests {
@@ -2924,6 +3286,8 @@ mod tests {
                         Err(error) => panic!("{error}"),
                     }
                 };
+                // Accepted sockets inherit the listener's non-blocking mode on Windows.
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut size = 0;
@@ -2954,6 +3318,221 @@ mod tests {
             assert_eq!(answer.is_some(), expected);
             if expected { assert_eq!(answer.unwrap().0, "actual answer"); assert_eq!(deltas, "actual answer"); }
         }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Serve one scripted HTTP response per connection; returns the base URL and the request bodies.
+    fn serve(responses: Vec<(&'static str, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let mut bodies = Vec::new();
+            for (status, body) in responses {
+                let started = Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(started.elapsed().as_secs() < 10, "Provider did not connect");
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut size = 0;
+                loop {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    if line == "\r\n" { break; }
+                    if let Some(length) = line.to_lowercase().strip_prefix("content-length:") {
+                        size = length.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut request = vec![0; size];
+                reader.read_exact(&mut request).unwrap();
+                bodies.push(String::from_utf8_lossy(&request).into_owned());
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            bodies
+        });
+        (format!("http://{address}/v1"), server)
+    }
+
+    fn fixture_manager(provider: &str, base_url: &str) -> (PathBuf, ProviderManager) {
+        let directory = std::env::temp_dir().join(format!("quixi-provider-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let manager = ProviderManager::new(&directory);
+        {
+            let mut state = manager.state.write();
+            state.active_provider = provider.into();
+            state.active_model = "fixture".into();
+            let entry = state.providers.iter_mut().find(|p| p.id == provider).unwrap();
+            entry.configured = true;
+            entry.selected_model = "fixture".into();
+            entry.base_url = base_url.into();
+            entry.api_key_raw = if provider == "custom" { String::new() } else { "sk-fixturesecret123".into() };
+        }
+        (directory, manager)
+    }
+
+    fn request<'a>(cancelled: &'a dyn Fn() -> bool) -> CompletionRequest<'a> {
+        CompletionRequest {
+            prompt: "Test",
+            cwd: "fixture",
+            history: &[],
+            model: Some("fixture"),
+            json_mode: false,
+            strict_model: true,
+            max_output_tokens: None,
+            cancelled,
+        }
+    }
+
+    #[test]
+    fn completions_report_truncation_interruption_and_http_details() {
+        let partial = "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n";
+        let (base, server) = serve(vec![
+            ("200 OK", format!("{partial}data: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"length\"}}]}}\n\ndata: [DONE]\n\n")),
+            ("200 OK", partial.to_string()),
+            ("401 Unauthorized", "{\"error\":{\"message\":\"Incorrect API key provided: sk-fixturesecret123 for\\n this   project\"}}".into()),
+            ("503 Service Unavailable\r\nRetry-After: 0", "busy".into()),
+            ("200 OK", "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".into()),
+        ]);
+        let (directory, manager) = fixture_manager("custom", &base);
+        let never = || false;
+        match manager.complete(&request(&never), |_| {}) {
+            Err(CompletionError::Truncated { partial, model, .. }) => {
+                assert_eq!(partial, "partial");
+                assert_eq!(model, "fixture");
+            }
+            other => panic!("expected truncation, got {:?}", other.err()),
+        }
+        let interrupted = manager.complete(&request(&never), |_| {}).err().unwrap();
+        assert!(matches!(interrupted, CompletionError::Stream(_)), "{interrupted}");
+        assert!(interrupted.to_string().contains("ended before the response completed"));
+        // The legacy chat helper shows no partial answer for an interrupted stream.
+        let http = manager.complete(&request(&never), |_| {}).err().unwrap();
+        let message = http.to_string();
+        assert!(message.contains("HTTP 401") && message.contains("Incorrect API key"), "{message}");
+        assert!(!message.contains("fixturesecret123"), "{message}");
+        let recovered = manager.complete(&request(&never), |_| {}).unwrap();
+        assert_eq!(recovered.text, "recovered");
+        assert_eq!(server.join().unwrap().len(), 5);
+
+        // Strict requests never substitute another model, and cancellation aborts before sending.
+        let mut strict = request(&never);
+        strict.model = Some("not-configured");
+        let error = manager.complete(&strict, |_| {}).err().unwrap();
+        assert!(error.to_string().contains("does not substitute"), "{error}");
+        assert_eq!(manager.state.read().active_model, "fixture");
+        let cancel = || true;
+        assert!(matches!(manager.complete(&request(&cancel), |_| {}), Err(CompletionError::Cancelled)));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn anthropic_requests_a_larger_output_limit_and_reports_max_tokens() {
+        let (base, server) = serve(vec![(
+            "200 OK",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"cut\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n".into(),
+        ), (
+            "200 OK",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"whole\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n".into(),
+        )]);
+        let (directory, manager) = fixture_manager("anthropic", &base);
+        let never = || false;
+        match manager.complete(&request(&never), |_| {}) {
+            Err(CompletionError::Truncated { partial, limit, .. }) => {
+                assert_eq!(partial, "cut");
+                assert_eq!(limit, Some(default_max_output_tokens()));
+            }
+            other => panic!("expected truncation, got {:?}", other.err()),
+        }
+        let mut sized = request(&never);
+        sized.max_output_tokens = Some(2048);
+        assert_eq!(manager.complete(&sized, |_| {}).unwrap().text, "whole");
+        let bodies = server.join().unwrap();
+        let first: Value = serde_json::from_str(&bodies[0]).unwrap();
+        assert_eq!(first["max_tokens"], default_max_output_tokens());
+        assert!(default_max_output_tokens() > 4096);
+        assert_eq!(serde_json::from_str::<Value>(&bodies[1]).unwrap()["max_tokens"], 2048);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saving_requires_a_resolvable_credential_except_for_local_and_custom_endpoints() {
+        let directory = std::env::temp_dir().join(format!("quixi-provider-save-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let manager = ProviderManager::new(&directory);
+        let configured = |id: &str| manager.state.read().providers.iter().find(|p| p.id == id).unwrap().configured;
+        if std::env::var_os("GROQ_API_KEY").is_none() {
+            let saved = manager.save_provider(&json!({"providerId":"groq","selectedModel":"some-model"}));
+            assert!(saved["error"].as_str().unwrap().contains("GROQ_API_KEY"), "{saved}");
+            assert!(!configured("groq"));
+            assert_ne!(manager.state.read().active_provider, "groq");
+        }
+        let saved = manager.save_provider(&json!({"providerId":"groq","apiKey":"gsk-fixture"}));
+        assert!(saved.get("error").is_none(), "{saved}");
+        assert!(configured("groq"));
+        for local in ["custom", "ollama"] {
+            let saved = manager.save_provider(&json!({"providerId":local,"setAsActive":false}));
+            assert!(saved.get("error").is_none(), "{saved}");
+            assert!(configured(local));
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn local_detection_uses_the_configured_url_and_keeps_the_chosen_model() {
+        let directory = std::env::temp_dir().join(format!("quixi-provider-detect-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let manager = ProviderManager::new(&directory);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let body = r#"{"data":[{"id":"served-a"},{"id":"served-b"}]}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            request_line
+        });
+        {
+            let mut st = manager.state.write();
+            let ollama = st.providers.iter_mut().find(|p| p.id == "ollama").unwrap();
+            ollama.base_url = format!("http://{address}/v1/");
+            ollama.configured = true;
+            ollama.selected_model = "my-chosen-model".into();
+        }
+        let result = manager.detect_local_servers();
+        assert!(server.join().unwrap().starts_with("GET /v1/models "));
+        let probe = result["servers"].as_array().unwrap().iter().find(|s| s["id"] == "ollama").unwrap().clone();
+        assert_eq!(probe["reachable"], true, "{probe}");
+        assert_eq!(probe["url"], format!("http://{address}/v1/models"));
+        let st = manager.state.read();
+        let ollama = st.providers.iter().find(|p| p.id == "ollama").unwrap();
+        assert_eq!(ollama.selected_model, "my-chosen-model");
+        assert!(ollama.models.iter().any(|m| m.id == "served-b"));
+        drop(st);
+
+        // A newly detected provider replaces an unserved catalog placeholder.
+        let mut fresh = ProviderManager::default_catalog().providers.into_iter().find(|p| p.id == "lmstudio").unwrap();
+        fresh.selected_model = "placeholder".into();
+        ProviderManager::apply_detected(&mut fresh, &["served-a".into()]);
+        assert_eq!(fresh.selected_model, "served-a");
+        assert!(fresh.configured);
         fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -1,7 +1,7 @@
 <div align="center">
 <img src="resources/rea-logo.svg" alt="REA Studio" width="220">
 
-# REA Studio V1.1.1
+# REA Studio V1.2.0
 
 **A native coding playground with an integrated REA reverse engineering workspace.**
 
@@ -10,7 +10,7 @@
 
 REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. Its dark playground layout keeps the project on the left, work in the centre, and model/tool settings on the right.
 
-**V1.1.1 (package version 1.1.1).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
+**V1.2.0 (package version 1.2.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
 
 This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/QuixiAI/QuixiDesk), with a separately implemented playground UI and the upstream MIT attribution preserved. It is an independent community project. It does not include the upstream Classic renderer, extracted application assets, proprietary fonts, example account data, or local machine configuration. See [NOTICE.md](NOTICE.md) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled components.
 
@@ -19,20 +19,23 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 | Area | Implemented behaviour |
 | --- | --- |
 | Projects | Open an existing local folder, browse/filter files, and reopen saved projects. |
-| Editor | Edit UTF-8 files, save with Ctrl+S, create files, and detect conflicting external edits. |
-| Changes | Inspect the real Git working tree, staged diff, and untracked file list. Git must be installed. |
-| Terminal | Execute PowerShell commands in the selected project and show actual stdout, stderr, and exit status. |
+| Editor | Edit UTF-8 files, save with Ctrl+S, create files, and detect conflicting external edits. CRLF line endings and a UTF-8 BOM are kept when saving; a file with mixed line endings is saved with LF, and the status bar says so first. Saving replaces the file (write to a temporary file, then rename), so hard links are not preserved and a file another program holds open without delete sharing cannot be saved until it is closed. |
+| Changes | Inspect the real Git working tree: changed files with status and line counts, per-file and staged diffs, untracked files. Stage, unstage, discard (with confirmation) and commit. Git must be installed. |
+| Terminal | Execute PowerShell commands (PowerShell 7 when installed, otherwise Windows PowerShell 5.1) in the selected project with streamed stdout/stderr, a Stop button, exit status, and a working directory that carries over between commands. |
 | Model tasks | One coding agent with streamed responses, bounded tool steps, persisted runs, and an activity log. |
 | Ask mode | Read project files and answer questions; optional static REA tools can inspect a selected artifact. |
 | Code mode | Read/write files and run commands as the signed-in Windows user. |
 | REA plugin | Persistent MCP connection, live tool schemas and availability, artifact selection, recovered code, and saved JSON evidence. |
 | Reconstruction | Binary → REA → SPEC.md → rebuild → oracle → retry, with separate implementation runs and persisted evidence/comparison reports. |
-| Analysis sources | Installed-tool selector, green live connection indicators, REA providers, x64dbg observations, and imported reports. |
-| Decompilation assistant | Separate LLM4Decompile endpoint and driving agent model; source-linked suggestions with verification status. |
+| Analysis sources | Installed-tool selector, green live connection indicators, REA providers (Ghidra, IDA attached or headless), x64dbg observations, and imported reports. |
+| IDA Pro bridge | Headless (idalib) or attached IDA with live tools, Hex-Rays pseudocode, xrefs/call graphs, persistent renames/comments/types in a private IDB, evidence records, and agent/MCP access. |
+| Guided workflow | Stage tracker and next-step prompts for target type, analysis source, missing configuration, failures and reconstruction stages. |
+| Models | One **Agent model** runs every task and calls tools; an optional **Decompile helper** (LLM4Decompile) is one of those tools. Connections are managed separately. |
+| Decompile helper | Optional LLM4Decompile endpoint that turns one function's Ghidra/IDA pseudocode or assembly into a source-linked, unverified C suggestion for the agent to review. |
 | Toolchain | Detection, configured paths, workflow guides, GUI launch, optional portable downloads and x64dbg bridge setup. |
 | Providers | API-key providers and local/custom OpenAI-compatible endpoints; model selection and connection testing. |
 
-This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY, a full debugger UI, Git staging/commit buttons, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
+This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY (commands cannot read keyboard input), a full debugger UI, Git branch/push/pull operations, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
 
 ## Requirements
 
@@ -47,11 +50,11 @@ No global Node, Java, Ghidra, npm, Rust, or administrator installation is needed
 
 ## Install and run
 
-1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.1.1-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
+1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.2.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
 2. Verify the ZIP in PowerShell:
 
    ```powershell
-   $archive = '.\REA-Studio-1.1.1-x64.zip'
+   $archive = '.\REA-Studio-1.2.0-x64.zip'
    $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
    $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
    if ($actual -ne $expected) { throw 'Checksum mismatch: download the release again.' }
@@ -86,7 +89,7 @@ These are examples, not a requirement to use those ports. For another computer, 
 
 Leave the key blank to preserve a saved credential, or look up the provider's environment key when none is saved. Examples: `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY` (then `GOOGLE_API_KEY`). Custom endpoints check `CUSTOM_API_KEY`, then the matching known provider's variable when the endpoint hostname matches exactly. Local servers check `OLLAMA_API_KEY`, `LMSTUDIO_API_KEY`, `VLLM_API_KEY` or `LLAMACPP_API_KEY`; `*_HOST` values are never used as credentials.
 
-Entered keys take priority, followed by the active OAuth credential or saved key, then environment lookup. Environment values are resolved for connection tests and model calls without being copied into settings or public state. Restart REA Studio after changing its inherited environment. Providers shows the source variable, without exposing its value.
+Entered keys take priority, followed by the active OAuth credential or saved key, then environment lookup. Environment values are resolved for connection tests and model calls without being copied into settings or public state. Restart REA Studio after changing its inherited environment. Providers shows the source variable, without exposing its value. Saving a provider that needs a key while no key is entered, saved or found in the environment reports an error and leaves it unconfigured; local and custom endpoints need no key. **Detect local** probes each local provider's configured base URL and keeps a model you already selected.
 
 ### Agent control and Classic access
 
@@ -108,12 +111,20 @@ Expected result: a real `hello.txt`, a write event, a command event with exit co
 
 - **Overview** contains the task and final answer. Run history is saved on the left.
 - **Code** shows the selected file. Ctrl+S saves; Tab inserts indentation. Unsaved edits are checked before changing files or starting a task.
-- **Changes** shows Git diffs and new files. Use the terminal or your usual Git client to stage, commit, branch, or push.
-- **Terminal** accepts non-interactive PowerShell commands. It is not a persistent shell session: each command starts a new process in the project folder.
+- **Changes** lists changed files (status, staged flag, added/removed lines; untracked files count their lines) and shows bounded diffs (2 MiB per diff, marked when truncated). Stage, unstage, discard and commit selected files; discarding restores files in `HEAD` from `HEAD` and deletes files that are not in `HEAD`, and requires confirmation. Commit hooks do not run from REA Studio, because every Git call points `core.hooksPath` at the null device (`NUL`; an empty value would resolve hooks to the drive root); use your usual Git client when hooks must run, and for branches, push or pull. A folder that is not a Git repository shows an empty list.
+- **Terminal** accepts non-interactive PowerShell commands and streams their output. Each command is a new process, but the working directory carries over: after `cd sub`, the next command starts in `sub`. A command that ends outside the project is noted, and the next command starts in the project root again. Up to 4 commands can run at once per project; **Stop** ends a command's whole process tree. Terminal commands stop after 30 minutes; output is bounded (the beginning and the end are kept), and finished output stays available for 10 minutes. Agent commands always start in the project root.
 - **Activity** records model requests and actual operations. Open an entry to inspect its details.
-- **Stop run** prevents the next step after the current request or tool finishes. It does not promise instant cancellation of an in-flight model request or Ghidra operation.
+- **Stop run** aborts the in-flight model stream or shell command and records the run as stopped. A REA/Ghidra or IDA operation already sent to its provider may still finish in that provider.
 
-A run is limited to 20 model/tool iterations. Editor files are limited to 2 MiB of UTF-8 text. Agent reads can page smaller ranges. Shell commands time out after 180 seconds; captured output is bounded. Interrupted runs are recorded as interrupted on restart.
+A run defaults to 40 model/tool steps (**Max steps**, 1–100). The agent can `write`, `edit` (exact unique replacement), `append`, and keep a bounded `note` that survives context compaction; older tool results are compacted to references rather than silently dropped. Truncated or interrupted model output is reported as such, never saved as a completed answer. Editor files are limited to 2 MiB of UTF-8 text. Agent reads can page smaller ranges. Shell commands time out after 180 seconds and run in a Windows Job Object: when a command ends, background processes it started (for example `Start-Process` or build servers) are ended too. Captured output is bounded to 128 KiB per stream, keeping the first 60% and the last 40% with an omission marker; stdout and stderr stay separate. A command's exit status comes from its last statement (an earlier failing native program does not fail a command whose last statement succeeds). Interrupted runs are recorded as interrupted on restart.
+
+**Command approval.** By default (**confirmCommands** `risky`) a Code-mode task pauses with status `awaiting_approval` before an agent command that looks destructive: recursive or forced deletes, `git reset --hard`, `git clean -f`, `git push --force`, `git checkout -- .`/`git restore .`, disk/boot/registry/execution-policy/power commands, writes to system folders, download-and-execute patterns such as `iwr … | iex`, encoded or Base64-decoded PowerShell, `Invoke-Expression` of variables or subexpressions, deletes fed by a pipeline or splatted parameters, and elevated `Start-Process -Verb RunAs`. Approve or deny it in the window (MCP clients cannot approve); the answer names the command you reviewed and is refused if the pending command has changed; a denial is returned to the model as `User denied this command: <reason>`. `all` asks before every command, `never` never asks. The classifier is a pattern check on the command text, not a sandbox: obfuscated or indirect commands can evade it.
+
+**Change sets.** The first time a task writes, edits or appends to a file, REA Studio saves the file's previous content (or notes that it did not exist) in application data. The task lists its changed files with before/after hashes and a conflict flag when the file changed after the task wrote it. You can view each file's diff against its previous content and revert files; files changed since the task wrote them are skipped unless you force it. Only the agent's write/edit/append actions are tracked, not files changed by shell commands. Agent writes keep an existing file's CRLF line endings and BOM.
+
+**Follow-up tasks.** A task can continue an earlier task in the same project (`parentRun`): the model receives the earlier prompt, its final answer (first 8,000 characters) and its change list, and can page the full answer with `task_record`. Runs record their provider, start and finish times and step count.
+
+Opening a project runs Git only when the repository's own config defines no command hooks (`core.fsmonitor`, `filter.*`, `diff.*.textconv`, pagers, credential helpers and similar). Otherwise the Changes panel reports Git as disabled for that project, so opening an untrusted folder never executes its configured programs.
 
 ## Reverse engineering with REA
 
@@ -152,7 +163,7 @@ The interactive catalog comes from the running REA version, not a fabricated too
 4. Click **1 · Prepare analysis**. This prepares an **Ask** task with REA enabled. Review it and click **Start task**. The agent gathers available static evidence and produces a brief: feature inventory, behaviour contracts, dependencies, evidence references, assumptions, unknowns, milestones and tests. A full application often requires several focused analysis runs.
 5. Review the completed brief in Overview. Return to Reverse engineering, select it, and click **2 · Save SPEC & prepare build**. This saves a dossier and prepares a **Code** task with REA disabled. The implementation run works from `SPEC.md` and project code. If you select an existing saved specification, it reuses your edited SPEC.
 6. The new `quixi-reconstruction-<UUID>` folder contains `SPEC.md`, `oracle-cases.json`, `manifest.json` with record hashes and user observations, a coverage checklist, and original REA responses for the selected artifact. Failed records remain failed; other artifacts' evidence is excluded. **Save evidence dossier** also works before the brief is complete.
-7. Add explicit oracle cases with supported expected outputs and their sources. In Code mode, click **3 · Run oracle checks**. Inspect the actual comparison report; an empty suite is **unverified**. **4 · Prepare retry** creates a repair task based on failures. Continue feature by feature, keeping uncovered requirements explicit.
+7. Add explicit oracle cases with supported expected outputs and their sources. In Code mode, click **3 · Run oracle checks**, review every listed command and approve the suite; the approval is pinned to the file's SHA-256. The agent's file actions and MCP file tools cannot approve a suite, but shell commands (Code-mode `command`, `studio_command`) run with your permissions and are not a security boundary. Inspect the actual comparison report; an empty suite is **unverified**. **4 · Prepare retry** creates a repair task based on failures. Continue feature by feature, keeping uncovered requirements explicit.
 
 Read [the reconstruction and oracle guide](docs/RECONSTRUCTION.md) for the exact case schema, output comparison rules, saved report format and implementation/analysis separation.
 
@@ -164,7 +175,7 @@ This is a workflow for **functional reconstruction**, not a promise of exact ori
 
 Open **Toolchain** for the analysis core, mobile/.NET, binary, runtime/network and rebuild/verification layers. The core REA/Ghidra runtime and matching REA workflow guides are bundled. The optional installer can obtain pinned portable JADX, the headless JADX MCP engine, Apktool, ILSpy, radare2, x64dbg, ImHex, dnSpyEx, Rizin and RAD Debugger releases with verified SHA-256 checksums.
 
-IDA Pro needs an existing licensed installation and compatible MCP registration. Frida and angr use separately configured environments. GhidraMCP is an optional separate GUI extension/server; REA already supplies the bridge used by this app. A file being found does not prove successful provider analysis. See [the complete integration table and setup guide](docs/TOOLCHAIN.md) for what is included, optional, and independently configured.
+IDA Pro needs an existing licensed installation; see [IDA Pro](#ida-pro) below. Frida and angr use separately configured environments. GhidraMCP is an optional separate GUI extension/server; REA already supplies the bridge used by this app. A file being found does not prove successful provider analysis. See [the complete integration table and setup guide](docs/TOOLCHAIN.md) for what is included, optional, and independently configured.
 
 ### Use an existing REA installation
 
@@ -247,9 +258,27 @@ For a real WebView2/Ghidra end-to-end check, follow [docs/TESTING.md](docs/TESTI
 
 **Reverse engineering → Analysis source** lists detected tools. REA, Ghidra, configured IDA and the JADX MCP provider use their live REA tools. x64dbg uses its optional Automate bridge. Other detected tools contribute exported UTF-8 reports, logs, JSON or decompiled source through **Import exported results**. Detection is bounded to configured paths, portable folders and PATH; use **Toolchain → Choose path** for another installation. Installed files alone do not produce a green Connected indicator.
 
+### IDA Pro
+
+With a licensed IDA Pro 9.x (idalib included) and Python 3.11+, click **Prepare IDA bridge setup** in **Reverse engineering → IDA Pro** and run the prepared `Install-IDA-Bridge.ps1` command in a project terminal (from source: `scripts/install-ida-bridge.ps1 -PythonExecutable <python.exe>`). It creates an app-local environment with ida-pro-mcp pinned to commit `c133c385` (the source snapshot REA 6.8.0's headless IDA profile is verified against) and activates idalib for your IDA directory. It does not change IDA's installation, your IDA plugins or other MCP clients' registrations. Then, in **Reverse engineering → IDA Pro**:
+
+- **Enable headless** starts IDA without its window. **Open selected target** copies the artifact to a private cache (`.quixi\ida\<SHA-256>\`) and opens its IDB there; the original file is never written. **Enable attached** instead connects to an IDA window running a modern ida-pro-mcp plugin at a loopback URL, and refuses unless IDA's input SHA-256 matches the selected artifact.
+- The live IDA tools (Hex-Rays `decompile`, `disasm`, `xrefs_to`, `callees`, `callgraph`, `basic_blocks`, `lookup_funcs`, types, searches…) run from the panel, from function rows, from the coding agent (when analysis tools are enabled for a task) and from `studio_ida_call`. Every call is saved as evidence.
+- With **Allow annotations** on, `rename`, `set_comments`, `set_type`, `declare_type` and similar tools are saved into that IDB, so names, types and comments accumulate across sessions. Patching, Python evaluation, debugger and database-management tools are never exposed.
+- **Use IDA for REA (headless)** points REA's own IDA provider at the same installation, so REA's evidence-tracked operations (`list_procedures`, `procedure_pseudo_code`, `xrefs`…) can use IDA instead of Ghidra; reconnect REA afterwards. **Restore attached IDA registration** puts back the previous setting. REA's IDA adapter is read-only; persistent annotations go through the bridge.
+
+The guided panel shows which of these steps are still needed for the selected target.
+
 For x64dbg, choose **Prepare bridge setup** and run the prepared command in a project terminal. Python 3.10+ is required. The installer keeps its Python environment and plugins app-local. Enable the connection, then explicitly start the selected EXE/DLL or connect an existing debugger PID. Read registers/memory/disassembly and control breakpoints/stepping through the live schema. Disabling leaves the debugger open. See [toolchain details](docs/TOOLCHAIN.md).
 
-Open **Decompilation assistant · LLM4Decompile**, choose a specialist provider and **Discover models**. Select the served model, its Ref V2 or End V1.5 input profile, and enable specialist requests. Select a different **Driving agent model** to coordinate the investigation. **Prepare task for driving model** prepares an Ask task; **Request specialist suggestion** calls the specialist directly. The specialist uses raw `/completions` prompts and leaves the main provider/model selection unchanged. It does not download models. Ref expects Ghidra pseudo-code; End expects prepared assembly. Generated suggestions keep the source record, input hash, model, completion status and unverified label. Compile and test them separately. Windows compatibility is not established by LLM4Decompile's Linux x86-64/GCC benchmarks.
+### Models: how they fit together
+
+**Connections** (the Connections dialog) are where models come from: API providers or local OpenAI-compatible servers. The right sidebar's **Models** card assigns them to two roles:
+
+- **Agent model** runs every task (coding, analysis, reconstruction) and calls tools: REA/Ghidra, the IDA bridge, x64dbg and the Decompile helper.
+- **Decompile helper** (optional) is an LLM4Decompile model that the agent, or you, can call as a tool. It rewrites one function's pseudocode or assembly as a C suggestion. It is not a second agent.
+
+Click **Set up** beside Decompile helper, choose a connection, **Discover models**, pick the served model and enable it. The input type is detected from the model name (Ref: pseudocode; End: prepared assembly) and can be overridden under Advanced. **Run helper on this function** calls it directly on a selected Ghidra or IDA decompilation record; **Ask the agent to use the helper** prepares an Ask task for the Agent model. Hex-Rays input is labelled in the suggestion's provenance because Ref was trained on Ghidra output. The helper uses raw `/completions` prompts, leaves the Agent model unchanged and does not download models. Generated suggestions keep the source record, input hash, model, completion status and unverified label. Compile and test them separately. Windows compatibility is not established by LLM4Decompile's Linux x86-64/GCC benchmarks.
 
 Green **Connected** labels reflect active MCP connections, successful REA provider observations, or the specialist's last successful completion. Opening a binary prepares its provider; a function listing, decompilation or other provider result must succeed before its label becomes green. Closing or reopening a target, or a failed analysis check, clears the provider labels. They are connection state, not proof of complete analysis or correct generated code. Recheck after changing or restarting an external tool.
 
@@ -270,7 +299,10 @@ See [docs/RELEASING.md](docs/RELEASING.md) for the exact version/tag procedure, 
 | Git panel is unavailable | Install Git for Windows, restart the app, and open a Git repository. |
 | Provider test fails | Check the base URL, `/v1` suffix, server reachability, and credentials. Check the provider's actual error. |
 | Model is listed but tasks fail | Check that it can be loaded and supports chat/completion requests; choose its exact advertised ID. |
-| Task reaches the iteration limit | Inspect Activity, reduce task scope, or select a model that follows structured tool instructions more reliably. |
+| Task reaches the iteration limit | Inspect Activity, raise **Max steps** (up to 100), reduce task scope, or select a model that follows structured tool instructions more reliably. |
+| Run reports truncated model output | The model hit its output limit. The agent is asked to split work with `edit`/`append`; raise the limit with the `maxOutputTokens` run option or `QUIXI_MAX_OUTPUT_TOKENS` if the provider allows it. |
+| Oracle run refuses an unapproved suite | Click **Run oracle checks**, review the commands and approve. Any change to the file requires a new approval. |
+| Changes panel says Git is disabled | The repository's own `.git/config` defines programs Git would run (fsmonitor, filters, textconv, pagers…). Hover for the keys. Remove them only if you trust the repository. |
 | Ghidra or Windows containment error | Use the bundled runtime, a supported PE target on fixed local NTFS, and run as your normal desktop account. Read REA's returned remediation. |
 | A catalog tool is unavailable | Inspect its reported provider/platform requirements. Inclusion in the catalog is not proof of availability. |
 | PE resources: `Resource range is not entirely file-backed in one section` | Some resource entries refer to bytes absent from the file-backed section. This can occur with packed or runtime-populated resources. Changing the path will not supply those bytes. Use **Prepare native analysis**, then **Run analysis**, and inspect native functions/imports while recording resource recovery as incomplete. This message alone does not prove the entire executable is invalid. |

@@ -38,7 +38,7 @@ pub fn normalize(mut response: Value) -> Value {
 impl DebuggerPlugin {
     pub fn connected(&self) -> bool {
         if let Some(mut guard) = self.client.try_lock() {
-            if guard.as_mut().is_some_and(|client| !client.running()) {
+            if guard.as_mut().is_some_and(|client| !client.usable()) {
                 *guard = None;
                 self.pid.store(0, Ordering::Release);
                 self.catalog.lock().clear();

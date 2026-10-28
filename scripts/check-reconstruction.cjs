@@ -22,6 +22,15 @@ assert.deepEqual(plans([brief], 'project-1', 'C:\\Original\\different.exe'), [])
 assert.match(prompt({...input,phase:'build',plan:brief,dossier:'quixi-reconstruction-example'}), /quixi-reconstruction-example\/SPEC.md/);
 assert.match(prompt({...input,phase:'retry',dossier:'quixi-reconstruction-example',reportPath:'quixi-oracle-runs/failed.json'}), /actual oracle failure report/);
 assert.match(brief.prompt, /Failed records are limitations/);
-assert.match(prompt({...input,phase:'build',plan:brief}), /oracle file schema is/);
-assert.match(prompt({...input,phase:'build',plan:brief}), /expectationSource/);
-console.log('Reconstruction checks passed: target separation, brief selection, evidence handoff and PE-resource recovery guidance.');
+const build = prompt({...input,phase:'build',plan:brief,dossier:'quixi-reconstruction-example'});
+assert.match(build, /Case schema:/);
+assert.match(build, /expectationSource/);
+// The implementation agent cannot rewrite the contract or approve its own oracle suite.
+assert.match(build, /read-only in this run/);
+assert.match(build, /only the user can approve an oracle suite/);
+assert.doesNotMatch(build, /\bFill\b/);
+// argv cases run programs directly; the schema in the prompt must parse.
+const schema = JSON.parse(build.match(/Case schema: (\{.*?\}\]\})/)[1]);
+assert.deepEqual(schema.cases[0].argv, ['build/rebuild.exe', '--flag']);
+assert.ok('stdin' in schema.cases[0] && !('command' in schema.cases[0]));
+console.log('Reconstruction checks passed: target separation, brief selection, evidence handoff, read-only oracle contract and PE-resource recovery guidance.');

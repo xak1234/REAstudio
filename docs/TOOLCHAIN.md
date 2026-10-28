@@ -7,7 +7,7 @@ Open **Reverse engineering → Toolchain** to inspect the actual files found and
 | Analysis core | [REA](https://github.com/morluto/rea) | Bundled stdio MCP, live catalog, persistent sessions and evidence. |
 | Analysis core | [Ghidra](https://github.com/NationalSecurityAgency/ghidra) | Bundled headless REA provider; optional GUI launch. |
 | Analysis core | [GhidraMCP](https://github.com/LaurieWired/GhidraMCP) | Optional separate GUI extension/MCP setup, linked from Toolchain. REA Studio uses REA's own Ghidra bridge; it does not register this second server automatically. |
-| Analysis core | [ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) | Existing licensed IDA and an existing compatible registration, consumed through REA's IDA adapter. |
+| Analysis core | [ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) | Your licensed IDA Pro. Optional app-local headless idalib bridge (pinned commit) with live schemas, a private persistent database per artifact and annotations; the same registration can serve REA's IDA provider. Attached GUI and REA's legacy attached profile remain supported. |
 | Mobile & apps | [JADX](https://github.com/skylot/jadx) | Pinned portable CLI/GUI download; REA Android calls additionally require the supported headless JADX MCP JAR. |
 | Mobile & apps | [Apktool](https://github.com/iBotPeaches/Apktool) | Pinned JAR download, launched with the bundled JDK from the terminal. |
 | Mobile & apps | [Frida](https://github.com/frida/frida) | User-supplied frida-tools environment and explicit runtime targets; REA's manual runtime tools remain subject to their live availability. |
@@ -40,11 +40,29 @@ Downloads use the exact official release URLs and SHA-256 digests recorded in `r
 
 The installer does not execute installers, add global PATH entries, register shell extensions, alter Java, install proxy certificates, or attach to processes. After installation, refresh detection and verify the tool. Windows SDKs, Python/.NET environments, device/emulator setup and project compilers remain separate prerequisites where required.
 
-## IDA provider
+## IDA Pro
 
-Use upstream's installation instructions for the licensed IDA environment and `ida-pro-mcp`. Follow [REA's current IDA provider guide](https://github.com/morluto/rea/blob/main/docs/ida-provider.md) to create its compatible JSON registration. In Toolchain choose that JSON file under **IDA Pro MCP registration**, then disconnect/restart REA before selecting **IDA** as Native analysis provider and opening the original input binary. Do not select an IDB/I64 database as the original artifact.
+IDA is used in three independent ways. All need your own licensed IDA Pro; REA Studio does not install IDA, accept its license terms, claim IDA Free is equivalent, or read license details. Select the original input binary, never an IDB/I64, as the artifact.
 
-REA Studio passes the configured file as `REA_IDA_MCP_CONFIG` only to its REA child process. It does not install IDA, change other clients' registrations, claim an IDA Free license is equivalent, or automatically accept upstream licensing terms. Readiness and analysis are established by real REA calls, not by the presence of the JSON file.
+### Headless bridge (recommended)
+
+Requires IDA Pro 9.x with idalib (`idalib.dll`) and Python 3.11+. From a source checkout run `scripts/install-ida-bridge.ps1 -PythonExecutable <python.exe>`, or `Install-IDA-Bridge.ps1` in a packaged release. `-IdaDirectory` defaults to the newest `C:\Program Files\IDA Professional *` containing `idalib.dll`; `-Destination` defaults to `resources\toolchain\ida-headless`. The installer creates its own virtual environment and installs IDA's bundled `idapro` wheel, `tomli-w==1.2.0` and `ida-pro-mcp` from the pinned commit `c133c3853faa111a9b00ee615c013b720d0c4acd` (the commit REA 6.8.0's headless profile is verified against). The idalib activation record is written inside the destination, not to your IDA profile. It verifies `import idapro` and `idalib-mcp --help`, then writes `rea-headless-registration.json` (`idalib-mcp --stdio --max-workers 1`, `IDADIR`) and `rea-ida-install.json` with the installed versions. It refuses non-empty destinations it did not create. No global Python package, PATH, IDA plugin, IDA install file or MCP-client registration is changed. Choose another registration JSON as **IDA headless registration** in Toolchain if you installed elsewhere.
+
+In **Reverse engineering** the bridge starts disabled on every launch. **Enable** starts `idalib-mcp` inside a kill-on-close Job Object (its idalib workers cannot outlive REA Studio) and loads the live tool schemas. **Open** copies the selected artifact to `%USERPROFILE%\.quixi\ida\<sha256>\<file name>` (only when not already present with the same hash) and opens that copy, so the `.i64` and every rename, comment and type persist across sessions without anything being written beside the original. **Close** saves and closes the database; accepted annotations are also saved immediately. IDA handles one call at a time: **Enable**, **Disable**, **Open** and **Close** wait for an in-flight IDA call to finish or reach its timeout (up to 5 minutes for most tools, 15 minutes for opening a database) before they take effect.
+
+Each call re-checks that the selected artifact is the bound one with unchanged content, injects the bridge's database ID, and saves the response as `ida-bridge` evidence (tool, arguments, response, target, SHA-256) for history and reconstruction dossiers. Tools are classified from the live catalog:
+
+- **Read** (decompile, disassembly, xrefs, callees, functions, globals, imports, strings, types, survey…): UI, Ask and Code tasks, and external MCP agents.
+- **Annotate** (rename, comments, bookmarks, types, stack variables, code/function/data definitions, `idb_save` in place): change only the private database. Allowed in Ask and Code mode while **Allow annotations** is on (default).
+- **Blocked**: Python evaluation, byte/assembly patching, integer writes, debugger tools, `idb_open`/`idb_close`/`idb_list` (managed by the bridge) and any unreviewed tool whose description does not explicitly state it is read-only. Registrations using upstream's `--unsafe` are refused.
+
+### Attached GUI
+
+A current ida-pro-mcp GUI plugin serving Streamable HTTP can be attached by URL (default `http://127.0.0.1:13337/mcp`; only `127.0.0.1`, `localhost` and `[::1]` are accepted). Opening reads IDA's `ida://idb/metadata` and is refused unless its input SHA-256 matches the selected artifact; each call also checks that IDA has not switched database. The GUI database belongs to you: Close detaches without closing it. The legacy ida-pro-mcp 1.4.0 plugin does not speak MCP over HTTP and is not usable here; it remains REA's attached profile below.
+
+### REA's IDA provider
+
+REA's IDA adapter (14 read-only operations) uses the registration in Toolchain **IDA Pro MCP registration** (`ida`), passed as `REA_IDA_MCP_CONFIG` only to the REA child process. The headless registration above works as REA's headless profile: **Register for REA** writes it to `ida` and keeps the previous value as `ida-attached-previous`; **Restore attached** puts that value back. Disconnect and reconnect REA after either change, then select **IDA** as Native analysis provider. An existing attached profile (legacy ida-pro-mcp 1.4.0 with its IDA plugin, following [REA's IDA provider guide](https://github.com/morluto/rea/blob/main/docs/ida-provider.md)) keeps working unchanged. Readiness and analysis are established by real calls, not by the presence of a JSON file.
 
 ## Android provider
 

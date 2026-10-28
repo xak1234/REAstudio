@@ -42,8 +42,9 @@ const {chromium}=require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwright
     await page.evaluate(async id=>{await refreshState();await loadDecompileSettings();await loadAnalysisHistory();renderEvidence(await pg('rea/evidence',{id}));await refreshConnectionBadges();},original.id);
     await page.locator('#decompile-settings').evaluate(n=>n.open=true);
     assert.match(await page.locator('#decompile-connection').textContent(),/^Connected/);
-    assert(await page.locator('#decompile-driver option').count()>=models.models.length);
-    await page.locator('#decompile-driver').selectOption('custom::'+provider.selectedModel);
+    // The Agent model is the driver; the helper is a tool it calls.
+    assert.match(await page.locator('#helper-status').textContent(),/^On/);
+    await page.locator('#model').selectOption('custom::'+provider.selectedModel);
     await page.locator('#decompile-prepare').click();
     await page.waitForFunction(()=>document.getElementById('task').value.includes('decompile_assist'));
     assert.match(await page.locator('#task').inputValue(),/decompile_assist/);

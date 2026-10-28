@@ -218,6 +218,7 @@ fn main() -> anyhow::Result<()> {
             mcp.stop();
             engine.rea.shutdown();
             engine.debugger.plugin.shutdown();
+            engine.ida.shutdown();
             *control_flow = ControlFlow::Exit;
         }
     });

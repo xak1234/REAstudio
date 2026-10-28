@@ -15,18 +15,20 @@ The listener binds only to `127.0.0.1`. Host and Origin headers are checked, and
 | `studio_analysis_sources` | Detected analysis sources, integration type and live connection status. |
 | `studio_import_analysis` | Import an installed tool’s exported text report for the selected artifact. |
 | `studio_debugger_status`, `studio_debugger_catalog`, `studio_debugger_call` | Inspect the optional x64dbg connection, obtain live schemas and use the user-selected session. |
+| `studio_ida_status`, `studio_ida_call` | Inspect the optional IDA Pro bridge and call its live IDA tools on the selected artifact's private IDB. Read and (when the user allows) annotation tools only; patching, Python evaluation and debugger tools are never exposed. |
 | `studio_decompile_status`, `studio_decompile_assist` | Read specialist configuration and request a source-linked, unverified LLM4Decompile suggestion. |
 | `studio_state` | Projects, model configuration without keys, and run summaries. |
 | `studio_open_project` | Register an existing absolute project directory. |
 | `studio_import_code` | Receive source files as a new project for code analysis or coding assistance. |
-| `studio_files`, `studio_read_file`, `studio_diff` | Actual project files, content/hash, and Git changes. |
-| `studio_write_file` | Write with the hash from a preceding read; empty hash only for a new file. |
-| `studio_command` | Execute a bounded noninteractive command in the project. |
-| `studio_start_run`, `studio_run_status`, `studio_stop_run` | Start a model task, inspect actual results, and request cancellation. |
+| `studio_files`, `studio_read_file`, `studio_diff` | Actual project files (`truncated` when the 2000-file listing stopped early), content/hash with `lineEnding` (`crlf`, `lf` or `mixed`) and `bom`, and Git changes: `files` (`path`, `status`, `staged`, `additions`, `deletions`), working-tree `diff` and `staged` diff bounded to 2 MiB each with `truncated`. Outside a Git repository the lists are empty. |
+| `studio_write_file` | Write with the hash from a preceding read; empty hash only for a new file (an existing path returns "File already exists"). Optional `lineEnding: "crlf"` converts LF to CRLF and `bom: true` prefixes a UTF-8 BOM; the returned hash is of the bytes written. |
+| `studio_command` | Execute a bounded noninteractive command in the project root (PowerShell 7 when installed, otherwise Windows PowerShell 5.1; `shell` reports which). Output keeps the first 60% and last 40% of 128 KiB per stream. |
+| `studio_start_run`, `studio_run_status`, `studio_stop_run` | Start a model task (optional `maxSteps` 1–100, `contextBudget` 50000–2000000 characters, `maxOutputTokens` 256–128000, `confirmCommands` `risky`/`all`/`never`, `parentRun` for a follow-up of an earlier task in the same project), inspect actual results, and stop it. Commands that need approval set status `awaiting_approval` with `pendingCommand`; only the user can approve or deny them in the desktop, and no MCP tool does. Run status includes `changes` (files the agent wrote, with `beforeHash`, `afterHash` and `conflict`), `provider`, `startedAt`, `finishedAt` and `steps`. |
 | `studio_rea_catalog` | Available static REA names and session state, or one full live tool schema. |
 | `studio_rea_select`, `studio_rea_call`, `studio_rea_evidence` | Select an artifact, call a static tool, and inspect saved evidence. |
 | `studio_export_spec` | Export a reconstruction specification and evidence dossier. |
-| `studio_oracle_run` | Execute declared oracle commands and retain real comparisons. |
+| `studio_oracle_preview` | Read an oracle suite's cases, SHA-256 and approval state. |
+| `studio_oracle_run` | Execute a user-approved oracle suite and retain real comparisons. Refused until the user approves the file's exact SHA-256 in the desktop. No MCP tool approves a suite, and the data folder holding approvals cannot be opened as a project; `studio_command` runs with the user's permissions and is not a security boundary. |
 
 The MCP tool catalog includes each operation's input schema. Open a project first and use its returned ID. The REA catalog is discovered from the running provider. The separate x64dbg tools become usable after desktop enablement and session selection. Arbitrary debugger commands, session selection, remote debugger connections, patching and toolchain registration are not exposed by that bridge. Decompilation assistance must be configured and enabled in the desktop; its optional input contains one reviewed function, and recordId must reference successful original evidence for the selected target. Shell commands and Code tasks still run with the signed-in user's normal permissions.
 
@@ -34,7 +36,7 @@ Requests are limited to 3 MiB and four concurrent handlers. Recent tool activity
 
 ## Minimal local client check
 
-Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.1.1`, twenty-four tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
+Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.2.0`, twenty-seven tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
 
 ## Receive code from an agent
 

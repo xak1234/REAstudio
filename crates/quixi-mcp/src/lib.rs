@@ -1,5 +1,6 @@
 pub mod rea;
 pub mod debugger;
+pub mod ida;
 use anyhow::Result;
 use quixi_platform::{BrowserUse, ComputerUse};
 use serde::{Deserialize, Serialize};
@@ -1415,17 +1416,24 @@ impl McpHost {
 
         let mut list = Vec::new();
         for (name, entry) in entries {
-            let tools = match name.as_str() {
-                "computer-use" => Self::computer_use_tools(),
-                "claude-in-chrome" => Self::claude_in_chrome_tools(),
-                "Claude Browser" | "Claude Preview" => Self::claude_browser_and_preview_tools(),
-                "applescript" => Self::applescript_tools(),
-                "pdf" => Self::pdf_tools(),
-                "memory" => Self::memory_tools(),
-                "fetch" => Self::fetch_tools(),
-                "github" => Self::github_tools(),
-                "office" | "office365" => Self::office365_tools(),
-                _ => Self::workspace_tools(),
+            // Built-in servers run in this process. An external stdio server is
+            // launched per call and holds no connection; its catalog is not known here.
+            let builtin = entry.command == "quixi-mcp-builtin";
+            let tools = if !builtin {
+                vec![]
+            } else {
+                match name.as_str() {
+                    "computer-use" => Self::computer_use_tools(),
+                    "claude-in-chrome" => Self::claude_in_chrome_tools(),
+                    "Claude Browser" | "Claude Preview" => Self::claude_browser_and_preview_tools(),
+                    "applescript" => Self::applescript_tools(),
+                    "pdf" => Self::pdf_tools(),
+                    "memory" => Self::memory_tools(),
+                    "fetch" => Self::fetch_tools(),
+                    "github" => Self::github_tools(),
+                    "office" | "office365" => Self::office365_tools(),
+                    _ => Self::workspace_tools(),
+                }
             };
             let uuid = Self::internal_server_uuid(&name).unwrap_or("a05f2752-b0d0-4e5e-97f4-0c85957a5eb7");
             list.push(json!({
@@ -1433,15 +1441,15 @@ impl McpHost {
                 "uuid": uuid,
                 "url": "",
                 "transport": "stdio",
-                "builtin": entry.command == "quixi-mcp-builtin",
+                "builtin": builtin,
                 "isInternal": false,
                 "serverSource": "user_config",
-                "isConnected": true,
+                "isConnected": builtin,
                 "hasAuth": false,
                 "runsOnSessionHost": false,
                 "wireKey": name,
-                "toolsEnumerated": true,
-                "status": "connected",
+                "toolsEnumerated": builtin,
+                "status": if builtin { "connected" } else { "disconnected" },
                 "command": entry.command,
                 "args": entry.args,
                 "tools": tools,
@@ -1477,11 +1485,8 @@ impl McpHost {
         let cfg = self.read_config();
         if let Some(entry) = cfg.mcp_servers.get(server_name_or_uuid) {
             if !entry.command.contains("quixi-mcp-builtin") && !entry.command.is_empty() {
-                if let Ok(ext_res) =
-                    Self::call_external_stdio_tool(entry, clean_tool, args, default_cwd)
-                {
-                    return Ok(ext_res);
-                }
+                // Never answer an external server's tool with a same-named built-in.
+                return Self::call_external_stdio_tool(entry, clean_tool, args, default_cwd);
             }
         }
 
@@ -1504,6 +1509,18 @@ impl McpHost {
             .stderr(Stdio::null());
 
         let mut child = cmd.spawn()?;
+        let outcome = Self::exchange_external_stdio(&mut child, tool_name, args);
+        let _ = child.kill();
+        let _ = child.wait();
+        outcome
+    }
+
+    fn exchange_external_stdio(
+        child: &mut std::process::Child,
+        tool_name: &str,
+        args: &Value,
+    ) -> Result<Value> {
+        const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
         if let Some(mut stdin) = child.stdin.take() {
             let init_req = json!({
                 "jsonrpc": "2.0",
@@ -1529,25 +1546,49 @@ impl McpHost {
                 }
             });
             let payload = format!("{}\n{}\n{}\n", init_req, notify_init, call_req);
-            let _ = stdin.write_all(payload.as_bytes());
-            let _ = stdin.flush();
+            stdin.write_all(payload.as_bytes())?;
+            stdin.flush()?;
         }
 
-        if let Some(stdout) = child.stdout.take() {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().take(20).flatten() {
-                if let Ok(val) = serde_json::from_str::<Value>(&line) {
-                    if val.get("id").and_then(|v| v.as_i64()) == Some(2) {
-                        let _ = child.kill();
-                        if let Some(res) = val.get("result") {
-                            return Ok(res.clone());
-                        }
-                    }
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("External stdio MCP server has no stdout"))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
                 }
             }
+        });
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        loop {
+            let line = match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+                Ok(line) => line,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => anyhow::bail!(
+                    "External stdio MCP server did not answer {tool_name} within {} s",
+                    TIMEOUT.as_secs()
+                ),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    anyhow::bail!("External stdio MCP server exited without a tools/call response")
+                }
+            };
+            let Ok(val) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let id = val.get("id").and_then(|v| v.as_i64());
+            if let (Some(1 | 2), Some(error)) = (id, val.get("error")) {
+                anyhow::bail!("External stdio MCP server error: {error}");
+            }
+            if id == Some(2) {
+                return val
+                    .get("result")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("External stdio MCP response has no result"));
+            }
         }
-        let _ = child.kill();
-        anyhow::bail!("External stdio MCP server did not return a tools/call response")
     }
 
     pub fn list_resources(&self, server_name_or_uuid: &str) -> Vec<Value> {
@@ -2471,11 +2512,37 @@ impl McpHost {
 mod tests {
     use super::*;
 
+    /// A host whose config and workspace live in a fresh temporary directory.
+    fn hermetic_host() -> (McpHost, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "quixi-mcp-host-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+        let host = McpHost { config_path: dir.join("config.json"), rea: None };
+        host.write_config(&json!({
+            "quixi-workspace": { "command": "quixi-mcp-builtin", "args": ["--workspace"] },
+            "external": { "command": dir.join("missing-server.exe").to_string_lossy() }
+        }))
+        .unwrap();
+        (host, dir)
+    }
+
     #[test]
     fn test_mcp_host_all_servers_and_tools() {
-        let host = McpHost::new();
+        let (host, dir) = hermetic_host();
         let statuses = host.list_server_statuses();
-        assert!(statuses.len() >= 5);
+        assert_eq!(statuses.len(), 2);
+        let status = |name: &str| statuses.iter().find(|s| s["name"] == name).unwrap().clone();
+        assert_eq!(status("quixi-workspace")["isConnected"], true);
+        // An external server is launched per call; it is never reported as connected.
+        assert_eq!(status("external")["isConnected"], false);
+        assert_eq!(status("external")["tools"], json!([]));
 
         let all_local = host.list_local_mcp_servers();
         assert!(all_local.len() >= 25);
@@ -2495,11 +2562,9 @@ mod tests {
         });
         assert!(has_chrome);
 
-        let cwd = Path::new(quixi_platform::default_workspace());
-
-        // 1. Workspace tools
+        // Workspace tools
         let read_res = host
-            .call_tool("quixi-workspace", "read_file", &json!({ "path": "Cargo.toml" }), cwd)
+            .call_tool("quixi-workspace", "read_file", &json!({ "path": "Cargo.toml" }), &dir)
             .unwrap();
         assert_eq!(read_res["isError"], false);
         assert!(read_res["content"][0]["text"]
@@ -2507,7 +2572,20 @@ mod tests {
             .unwrap_or("")
             .contains("[workspace]"));
 
-        // 2. Computer Use tools
+        // A failing external server is reported, not answered by a built-in tool.
+        assert!(host
+            .call_tool("external", "read_file", &json!({ "path": "Cargo.toml" }), &dir)
+            .is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    #[ignore = "needs an interactive desktop session (screen capture, input, app list) and the browser bridge"]
+    fn desktop_computer_and_browser_tools() {
+        let (host, dir) = hermetic_host();
+        let cwd = dir.as_path();
+
+        // Computer Use tools
         let cursor_res = host
             .call_tool("computer-use", "cursor_position", &json!({}), cwd)
             .unwrap();
@@ -2557,5 +2635,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(batch_res["isError"], false);
+        let _ = fs::remove_dir_all(dir);
     }
 }

@@ -1,8 +1,9 @@
 //! Bundled REA plugin. One owned MCP process preserves targets and Evidence IDs.
 use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
+use quixi_platform::ProcessJob;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::{
     collections::VecDeque,
     io::{BufRead, BufReader, Read, Write},
@@ -13,6 +14,25 @@ use std::{
 };
 
 const FRAME_LIMIT: u64 = 16 * 1024 * 1024;
+/// Ghidra's first import may use most of REA_GHIDRA_STARTUP_TIMEOUT_MS before analysis starts.
+const DEFAULT_CALL_TIMEOUT_SECS: u64 = 1800;
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
+const SESSION_TIMEOUT: Duration = Duration::from_secs(120);
+const DIAGNOSTIC_LINES: usize = 30;
+
+/// Per-call budget for REA tools; override with QUIXI_REA_CALL_TIMEOUT_SECS.
+pub fn call_timeout() -> Duration {
+    Duration::from_secs(
+        std::env::var("QUIXI_REA_CALL_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|secs| *secs > 0)
+            .unwrap_or(DEFAULT_CALL_TIMEOUT_SECS),
+    )
+}
+
+/// Names must exist in REA 6.8.0's catalog (resources/plugins/rea/tool-catalog-6.8.0.txt).
+/// Annotation tools edit only REA's ephemeral session database, never the artifact.
 pub const AGENT_TOOLS: &[&str] = &[
     "binary_session",
     "open_binary",
@@ -42,15 +62,12 @@ pub const AGENT_TOOLS: &[&str] = &[
     "list_strings",
     "search_strings",
     "search_procedures",
-    "get_procedure",
     "procedure_pseudo_code",
     "procedure_info",
     "procedure_references",
     "procedure_assembly",
     "analyze_function",
-    "procedure_list",
     "procedure_address",
-    "procedure_name",
     "procedure_callers",
     "procedure_callees",
     "inspect_native_api",
@@ -58,26 +75,44 @@ pub const AGENT_TOOLS: &[&str] = &[
     "read_function_instructions",
     "get_call_graph",
     "trace_call_path",
-    "get_xrefs",
     "get_evidence_bundle",
     "read_bytes",
     "search_bytes",
     "find_xrefs_to_name",
-    "list_imports",
-    "list_exports",
+    "xrefs",
+    "list_names",
+    "list_segments",
+    "resolve_containing_procedure",
+    "batch_decompile",
+    "inspect_address_context",
+    "address_name",
+    "set_address_name",
+    "set_addresses_names",
+    "set_comment",
+    "set_inline_comment",
+    "set_bookmark",
+    "list_bookmarks",
 ];
 
 pub(crate) struct Client {
     child: Child,
+    job: Option<Arc<ProcessJob>>,
     input: ChildStdin,
     responses: mpsc::Receiver<Result<Value, String>>,
     stderr: Arc<Mutex<VecDeque<String>>>,
     id: u64,
     terminate_tree: bool,
+    /// Requests cancelled after a timeout; their late replies are discarded.
+    abandoned: VecDeque<u64>,
+    /// The transport ended or failed. Only then is the session unusable.
+    broken: bool,
 }
 impl Client {
     pub(crate) fn pid(&self) -> u32 { self.child.id() }
     pub(crate) fn running(&mut self) -> bool { matches!(self.child.try_wait(), Ok(None)) }
+    pub(crate) fn usable(&mut self) -> bool { !self.broken && self.running() }
+    fn job(&self) -> Option<Arc<ProcessJob>> { self.job.clone() }
+    fn diagnostics(&self) -> String { self.stderr.lock().iter().cloned().collect() }
     fn start(root: &Path, mode: &str) -> Result<Self> {
         let node = root.join(if cfg!(windows) {
             "node/node.exe"
@@ -178,9 +213,24 @@ impl Client {
     pub(crate) fn spawn(mut command: Command, terminate_tree: bool) -> Result<Self> {
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = command.spawn().context("Could not launch MCP provider")?;
+        // A kill-on-close job ends node and its Ghidra JVM even if node crashes first.
+        // Bridges that must leave their debugger running (terminate_tree=false) stay outside.
+        let job = if terminate_tree {
+            match ProcessJob::assign(&child) {
+                Ok(job) => Some(Arc::new(job)),
+                Err(error) => {
+                    tracing::warn!("MCP provider process tree is not job-owned: {error:#}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let input = child.stdin.take().context("REA stdin unavailable")?;
         let stdout = child.stdout.take().context("REA stdout unavailable")?;
         let stderr_pipe = child.stderr.take().context("REA stderr unavailable")?;
+        let stderr = Arc::new(Mutex::new(VecDeque::new()));
+        let noise = stderr.clone();
         let (tx, responses) = mpsc::sync_channel(32);
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
@@ -197,10 +247,19 @@ impl Client {
                         if line.trim().is_empty() {
                             continue;
                         }
-                        let value = serde_json::from_str(&line)
-                            .map_err(|e| format!("Invalid MCP response: {e}"));
-                        if tx.send(value).is_err() {
-                            break;
+                        match serde_json::from_str(&line) {
+                            Ok(value) => {
+                                if tx.send(Ok(value)).is_err() {
+                                    break;
+                                }
+                            }
+                            // Stray stdout output (a log line, a banner) is not a frame.
+                            // Keep it for diagnostics; only EOF or an I/O error is fatal.
+                            Err(error) => {
+                                let excerpt: String = line.trim_end().chars().take(400).collect();
+                                tracing::debug!("Skipped non-JSON MCP stdout line: {error}");
+                                push_diagnostic(&noise, format!("[stdout, not JSON] {excerpt}\n"));
+                            }
                         }
                     }
                     Err(error) => {
@@ -210,7 +269,6 @@ impl Client {
                 }
             }
         });
-        let stderr = Arc::new(Mutex::new(VecDeque::new()));
         let captured = stderr.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stderr_pipe);
@@ -218,23 +276,20 @@ impl Client {
                 let mut line = String::new();
                 match reader.by_ref().take(8192).read_line(&mut line) {
                     Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        let mut tail = captured.lock();
-                        tail.push_back(line);
-                        if tail.len() > 30 {
-                            tail.pop_front();
-                        }
-                    }
+                    Ok(_) => push_diagnostic(&captured, line),
                 }
             }
         });
         let mut client = Self {
             child,
+            job,
             input,
             responses,
             stderr,
             id: 0,
             terminate_tree,
+            abandoned: VecDeque::new(),
+            broken: false,
         };
         let initialized = client.request(
             "initialize",
@@ -248,28 +303,59 @@ impl Client {
         client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))?;
         Ok(client)
     }
+    /// Any write failure means the pipe is gone; the session cannot recover.
     fn send(&mut self, value: Value) -> Result<()> {
-        serde_json::to_writer(&mut self.input, &value)?;
-        self.input.write_all(b"\n")?;
-        self.input.flush()?;
-        Ok(())
+        let written = (|| -> Result<()> {
+            serde_json::to_writer(&mut self.input, &value)?;
+            self.input.write_all(b"\n")?;
+            self.input.flush()?;
+            Ok(())
+        })();
+        if written.is_err() {
+            self.broken = true;
+        }
+        written
     }
     pub(crate) fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+        if self.broken {
+            bail!("The MCP connection has ended. Reconnect before continuing.");
+        }
         self.id += 1;
         let id = self.id;
-        self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
+        self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
+            .context("Could not send the MCP request")?;
         let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let message = self
-                .responses
-                .recv_timeout(remaining)
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                "MCP connection ended or timed out ({e}). Reconnect before continuing; the last operation may have completed. {}",
-                self.stderr.lock().iter().cloned().collect::<String>())
-                })?
-                .map_err(anyhow::Error::msg)?;
+            let message = match self.responses.recv_timeout(remaining) {
+                Ok(Ok(message)) => message,
+                Ok(Err(error)) => {
+                    self.broken = true;
+                    bail!("MCP connection failed ({error}). Reconnect before continuing; the last operation may have completed. {}", self.diagnostics())
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.broken = true;
+                    bail!("MCP connection ended. Reconnect before continuing; the last operation may have completed. {}", self.diagnostics())
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Cancel only this request. The process, its open target and
+                    // retained Evidence IDs stay available for the next call.
+                    let reason = format!(
+                        "REA Studio stopped waiting for {method} after {} s",
+                        timeout.as_secs()
+                    );
+                    let _ = self.send(json!({"jsonrpc":"2.0","method":"notifications/cancelled",
+                        "params":{"requestId":id,"reason":reason}}));
+                    self.abandoned.push_back(id);
+                    if self.abandoned.len() > 256 {
+                        self.abandoned.pop_front();
+                    }
+                    if self.broken {
+                        bail!("{reason}, and the connection has ended. Reconnect before continuing. {}", self.diagnostics());
+                    }
+                    bail!("{reason}. The request was cancelled and the session was kept; retry with a narrower request or a longer timeout.");
+                }
+            };
             if let Some(method) = message.get("method").and_then(Value::as_str) {
                 if let Some(request_id) = message.get("id") {
                     // This client does not advertise sampling, roots or elicitation.
@@ -281,7 +367,12 @@ impl Client {
                 }
                 continue;
             }
-            if message.get("id").and_then(Value::as_u64) != Some(id) {
+            let response_id = message.get("id").and_then(Value::as_u64);
+            if response_id != Some(id) {
+                // A late reply to a cancelled request is not this request's answer.
+                if let Some(position) = self.abandoned.iter().position(|a| Some(*a) == response_id) {
+                    self.abandoned.remove(position);
+                }
                 continue;
             }
             if let Some(error) = message.get("error") {
@@ -293,22 +384,33 @@ impl Client {
                 .context("MCP result is missing");
         }
     }
-    fn tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
+    fn tool(&mut self, name: &str, arguments: Value, timeout: Duration) -> Result<Value> {
         self.request(
             "tools/call",
             json!({"name":name,"arguments":arguments}),
-            Duration::from_secs(600),
+            timeout,
         )
+    }
+}
+fn push_diagnostic(tail: &Mutex<VecDeque<String>>, line: String) {
+    let mut tail = tail.lock();
+    tail.push_back(line);
+    while tail.len() > DIAGNOSTIC_LINES {
+        tail.pop_front();
     }
 }
 impl Drop for Client {
     fn drop(&mut self) {
+        // The job reaches descendants (Ghidra JVM) even after node itself has exited.
+        if let Some(job) = &self.job {
+            job.terminate();
+        }
         if self.child.try_wait().ok().flatten().is_some() {
             return;
         }
-        // Closing stdin alone can leave a Ghidra JVM alive. Terminate the owned tree.
+        // Without a job, closing stdin alone can leave a Ghidra JVM alive.
         #[cfg(windows)]
-        if self.terminate_tree {
+        if self.terminate_tree && self.job.is_none() {
             use std::os::windows::process::CommandExt;
             let _ = Command::new("taskkill.exe")
                 .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
@@ -354,6 +456,11 @@ pub struct ReaPlugin {
     catalog: Mutex<Vec<Value>>,
     pid: AtomicU32,
     mode: Mutex<String>,
+    /// The live process tree, reachable while a call holds `client`, so
+    /// disconnect and shutdown can end it immediately.
+    process: Mutex<Option<(u32, Option<Arc<ProcessJob>>)>>,
+    /// Incremented by disconnect/shutdown so a racing connect does not respawn.
+    generation: AtomicU64,
 }
 impl ReaPlugin {
     pub fn workflow(&self, request: &Value) -> Result<Value> {
@@ -399,13 +506,35 @@ impl ReaPlugin {
     pub fn is_connected(&self) -> bool {
         // A busy request owns the client lock; never block UI status on analysis.
         if let Some(mut guard) = self.client.try_lock() {
-            if guard.as_mut().is_some_and(|client| !client.running()) {
-                *guard = None;
-                self.pid.store(0, Ordering::Release);
-                self.catalog.lock().clear();
+            if guard.as_mut().is_some_and(|client| !client.usable()) {
+                self.forget_client(&mut guard);
             }
         }
         self.pid.load(Ordering::Acquire) != 0
+    }
+    /// Drop the client (its Drop ends the process tree) and every cached view of it.
+    fn forget_client(&self, guard: &mut Option<Client>) {
+        *guard = None;
+        self.pid.store(0, Ordering::Release);
+        self.catalog.lock().clear();
+        *self.process.lock() = None;
+    }
+    /// End the REA process tree without waiting for the client lock.
+    fn kill_out_of_band(&self) {
+        match self.process.lock().take() {
+            Some((_, Some(job))) => job.terminate(),
+            #[cfg(windows)]
+            Some((pid, None)) => {
+                use std::os::windows::process::CommandExt;
+                let _ = Command::new("taskkill.exe")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .creation_flags(0x08000000)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+            _ => {}
+        }
     }
     pub fn process_id(&self) -> u32 { self.pid.load(Ordering::Acquire) }
     pub fn new(resources: &Path) -> Self {
@@ -425,6 +554,8 @@ impl ReaPlugin {
             client: Mutex::new(None),
             catalog: Mutex::new(vec![]),
             pid: AtomicU32::new(0),
+            process: Mutex::new(None),
+            generation: AtomicU64::new(0),
         }
     }
     pub fn connect(&self, requested_mode: Option<&str>) -> Result<Value> {
@@ -442,83 +573,130 @@ impl ReaPlugin {
             }
         }
         let mode = self.mode.lock().clone();
+        let generation = self.generation.load(Ordering::Acquire);
         let mut guard = self.client.lock();
-        if guard.is_none() {
-            let mut client = Client::start(&self.root, &mode)?;
-            let mut tools = vec![];
-            let mut params = json!({});
-            for _ in 0..100 {
-                let page = client.request("tools/list", params, Duration::from_secs(45))?;
-                tools.extend(
-                    page["tools"]
-                        .as_array()
-                        .context("Invalid REA tool catalog")?
-                        .iter()
-                        .cloned(),
-                );
-                match page.get("nextCursor").and_then(Value::as_str) {
-                    Some(cursor) => params = json!({"cursor":cursor}),
-                    None => break,
+        for attempt in 0..2 {
+            // A cached client whose process or transport ended is replaced.
+            if guard.as_mut().is_some_and(|client| !client.usable()) {
+                self.forget_client(&mut guard);
+            }
+            let fresh = guard.is_none();
+            if fresh {
+                let mut client = Client::start(&self.root, &mode)?;
+                *self.process.lock() = Some((client.pid(), client.job()));
+                // A disconnect during start found no process to end, and one during the
+                // catalog request ends it; either way the new client must not be kept.
+                let disconnected = || self.generation.load(Ordering::Acquire) != generation;
+                let tools = if disconnected() {
+                    Err(anyhow::anyhow!("Disconnected while connecting"))
+                } else {
+                    Self::list_tools(&mut client)
+                };
+                match tools {
+                    Ok(tools) if !disconnected() => {
+                        *self.catalog.lock() = tools;
+                        self.pid.store(client.pid(), Ordering::Release);
+                        *guard = Some(client);
+                    }
+                    result => {
+                        drop(client);
+                        self.forget_client(&mut guard);
+                        match result {
+                            Err(error) if !disconnected() => return Err(error),
+                            _ => bail!("Disconnected while connecting"),
+                        }
+                    }
                 }
             }
-            *self.catalog.lock() = tools;
-            self.pid.store(client.child.id(), Ordering::Release);
-            *guard = Some(client);
-        }
-        let supports_detail = self
-            .catalog
-            .lock()
-            .iter()
-            .find(|t| t["name"] == "binary_session")
-            .and_then(|t| t.pointer("/inputSchema/properties/detail"))
-            .is_some();
-        let session = guard.as_mut().unwrap().tool(
-            "binary_session",
-            if supports_detail {
-                json!({"detail":"complete"})
-            } else {
-                json!({})
-            },
-        );
-        match session {
-            Ok(session) if session["isError"] == true => {
-                bail!("REA session inspection failed: {}", payload(&session))
+            let supports_detail = self
+                .catalog
+                .lock()
+                .iter()
+                .find(|t| t["name"] == "binary_session")
+                .and_then(|t| t.pointer("/inputSchema/properties/detail"))
+                .is_some();
+            let Some(client) = guard.as_mut() else {
+                bail!("REA is not connected");
+            };
+            let session = client.tool(
+                "binary_session",
+                if supports_detail {
+                    json!({"detail":"complete"})
+                } else {
+                    json!({})
+                },
+                SESSION_TIMEOUT,
+            );
+            match session {
+                Ok(session) if session["isError"] == true => {
+                    bail!("REA session inspection failed: {}", payload(&session))
+                }
+                Ok(session) => {
+                    return Ok(
+                        json!({"connected":true,"mode":mode,"installedWrapper":installed_wrapper(),"session":payload(&session),"tools":*self.catalog.lock()}),
+                    )
+                }
+                Err(error) => {
+                    if !client.usable() {
+                        self.forget_client(&mut guard);
+                        // Respawn a dead cached client once, unless a disconnect intervened.
+                        if !fresh
+                            && attempt == 0
+                            && self.generation.load(Ordering::Acquire) == generation
+                        {
+                            continue;
+                        }
+                    }
+                    return Err(error);
+                }
             }
-            Ok(session) => Ok(
-                json!({"connected":true,"mode":mode,"installedWrapper":installed_wrapper(),"session":payload(&session),"tools":*self.catalog.lock()}),
-            ),
-            Err(error) => {
-                *guard = None;
-                self.pid.store(0, Ordering::Release);
-                Err(error)
+        }
+        bail!("REA could not be restarted")
+    }
+    fn list_tools(client: &mut Client) -> Result<Vec<Value>> {
+        let mut tools = vec![];
+        let mut params = json!({});
+        for _ in 0..100 {
+            let page = client.request("tools/list", params, Duration::from_secs(45))?;
+            tools.extend(
+                page["tools"]
+                    .as_array()
+                    .context("Invalid REA tool catalog")?
+                    .iter()
+                    .cloned(),
+            );
+            match page.get("nextCursor").and_then(Value::as_str) {
+                Some(cursor) => params = json!({"cursor":cursor}),
+                None => break,
             }
         }
+        Ok(tools)
     }
     pub fn disconnect(&self) -> Result<()> {
-        let mut guard = self.client.lock();
-        if let Some(client) = guard.as_mut() {
-            let _ = client.tool("close_binary", json!({}));
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        if let Some(mut guard) = self.client.try_lock() {
+            if let Some(client) = guard.as_mut() {
+                if client.usable() {
+                    let _ = client.tool("close_binary", json!({}), CLOSE_TIMEOUT);
+                }
+            }
+            self.forget_client(&mut guard);
+            return Ok(());
         }
-        *guard = None;
+        // A call owns the client. End the tree now; that call then fails with a
+        // transport error and releases the lock.
+        self.kill_out_of_band();
         self.pid.store(0, Ordering::Release);
         self.catalog.lock().clear();
+        if let Some(mut guard) = self.client.try_lock_for(Duration::from_secs(10)) {
+            self.forget_client(&mut guard);
+        }
         Ok(())
     }
     pub fn shutdown(&self) {
-        let pid = self.pid.swap(0, Ordering::AcqRel);
-        if pid == 0 {
-            return;
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = Command::new("taskkill.exe")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .creation_flags(0x08000000)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.kill_out_of_band();
+        self.pid.store(0, Ordering::Release);
         if let Some(mut guard) = self.client.try_lock() {
             *guard = None;
         }
@@ -531,20 +709,114 @@ impl ReaPlugin {
             bail!("Tool is not advertised by the connected REA server: {name}");
         }
         let mut guard = self.client.lock();
+        self.call_locked(&mut guard, name, args, call_timeout())
+    }
+    /// Only a transport failure ends the session; a timeout or tool error keeps it.
+    fn call_locked(&self, guard: &mut Option<Client>, name: &str, args: Value, timeout: Duration) -> Result<Value> {
         let client = guard
             .as_mut()
             .context("Connect the bundled REA plugin first")?;
-        match client.tool(name, args) {
-            Ok(value) => Ok(value),
-            Err(error) => {
-                *guard = None;
-                self.pid.store(0, Ordering::Release);
-                Err(error)
-            }
+        let result = client.tool(name, args, timeout);
+        if result.is_err() && !client.usable() {
+            self.forget_client(guard);
         }
+        result
+    }
+    /// Call without queueing behind a running request; fails if REA stays busy.
+    fn call_when_idle(&self, name: &str, args: Value, timeout: Duration) -> Result<Value> {
+        let mut guard = self
+            .client
+            .try_lock_for(Duration::from_secs(2))
+            .context("An REA call is still running. Wait for it to finish, or disconnect REA.")?;
+        self.call_locked(&mut guard, name, args, timeout)
+    }
+    /// The binary REA currently has open, as REA itself reports it.
+    pub fn open_target(&self) -> Result<Option<String>> {
+        if !self.is_connected() {
+            return Ok(None);
+        }
+        let response = self.call_when_idle("binary_session", json!({}), CLOSE_TIMEOUT)?;
+        if response["isError"] == true {
+            bail!("REA session inspection failed: {}", payload(&response));
+        }
+        let session = payload(&response);
+        let session = session.get("result").unwrap_or(&session);
+        if session["open"] != true {
+            return Ok(None);
+        }
+        Ok(session["path"].as_str().map(str::to_owned))
+    }
+    /// Close REA's open binary with a short timeout.
+    pub fn close_target(&self) -> Result<()> {
+        let response = self.call_when_idle("close_binary", json!({}), CLOSE_TIMEOUT)?;
+        if response["isError"] == true {
+            bail!("REA could not close its open binary: {}", payload(&response));
+        }
+        Ok(())
     }
     pub fn agent_tools(&self) -> Vec<Value> {
         self.catalog.lock().iter().filter(|t| t["name"].as_str().map(|n| AGENT_TOOLS.contains(&n)).unwrap_or(false))
             .map(|t| json!({"name":t["name"],"description":t["description"],"inputSchema":t["inputSchema"]})).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_tools_exist_in_the_bundled_rea_catalog() {
+        let catalog = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../resources/plugins/rea/tool-catalog-6.8.0.txt"
+        ));
+        let names: std::collections::HashSet<&str> =
+            catalog.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        assert!(names.len() > 200, "catalog looks truncated");
+        let missing: Vec<_> = AGENT_TOOLS.iter().filter(|t| !names.contains(*t)).collect();
+        assert!(missing.is_empty(), "not advertised by REA 6.8.0: {missing:?}");
+        let mut unique = AGENT_TOOLS.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), AGENT_TOOLS.len(), "duplicate agent tool names");
+    }
+
+    /// A scripted stdio server: never answers `slow`, exits on `exit`, echoes
+    /// cancellations as non-JSON stdout, and answers everything else.
+    #[cfg(windows)]
+    fn scripted_server() -> (Client, PathBuf) {
+        let script = std::env::temp_dir().join(format!("quixi-mcp-fake-{}.ps1", std::process::id()));
+        std::fs::write(&script, r#"
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  $m = $line | ConvertFrom-Json
+  if ($null -eq $m.id) {
+    if ($m.method -eq 'notifications/cancelled') { [Console]::Out.WriteLine('cancelled ' + $m.params.requestId); [Console]::Out.Flush() }
+    continue
+  }
+  if ($m.method -eq 'initialize') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $m.id + ',"result":{"protocolVersion":"2025-03-26"}}') }
+  elseif ($m.params.name -eq 'exit') { exit 0 }
+  elseif ($m.params.name -ne 'slow') { [Console]::Out.WriteLine('{"jsonrpc":"2.0","id":' + $m.id + ',"result":{"ok":true}}') }
+  [Console]::Out.Flush()
+}
+"#).unwrap();
+        let mut command = quixi_platform::background_command("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]).arg(&script);
+        (Client::spawn(command, true).unwrap(), script)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn timeout_cancels_the_request_and_keeps_the_session() {
+        let (mut client, script) = scripted_server();
+        let error = client.tool("slow", json!({}), Duration::from_secs(2)).unwrap_err();
+        assert!(error.to_string().contains("session was kept"), "{error}");
+        assert!(client.usable());
+        // The server's non-JSON stdout line is skipped, not fatal.
+        assert_eq!(client.tool("fast", json!({}), Duration::from_secs(30)).unwrap()["ok"], true);
+        assert!(client.diagnostics().contains("cancelled 2"), "{}", client.diagnostics());
+        assert!(client.tool("exit", json!({}), Duration::from_secs(30)).is_err());
+        assert!(!client.usable());
+        drop(client);
+        let _ = std::fs::remove_file(script);
     }
 }
