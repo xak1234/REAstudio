@@ -56,7 +56,7 @@ $env:REA_STUDIO_TEST_EXPECTED_ENV_KEY = $env:CUSTOM_API_KEY
 node scripts/smoke-mcp.cjs
 ```
 
-This connects the official MCP client to the actual app listener, checks authentication and foreign-origin rejection, lists twenty-seven tools, reads/writes real fixture files, rejects stale writes/path escapes, executes PowerShell, and retrieves a live REA schema. It imports source files into distinct projects, preserves unsaved editor work, opens received code in the UI, rejects unsafe paths, and analyses imported JavaScript through real REA. A temporary local provider verifies that blank-key connection tests and model calls receive the inherited environment credential without persisting or returning it. The model response is a controlled fixture, not evidence of real model capability. The check also verifies listener shutdown, token rotation, cleared connection-config text, and collapsed Classic access. It must finish with `passed: true` and no JavaScript errors. Close the test app and remove the test environment overrides afterwards.
+This connects the official MCP client to the actual app listener, checks authentication and foreign-origin rejection, lists twenty-eight tools, reads/writes real fixture files, rejects stale writes/path escapes, executes PowerShell, and retrieves a live REA schema. It imports source files into distinct projects, preserves unsaved editor work, opens received code in the UI, rejects unsafe paths, and analyses imported JavaScript through real REA. A temporary local provider verifies that blank-key connection tests and model calls receive the inherited environment credential without persisting or returning it. The model response is a controlled fixture, not evidence of real model capability. The check also verifies listener shutdown, token rotation, cleared connection-config text, and collapsed Classic access. It must finish with `passed: true` and no JavaScript errors. Close the test app and remove the test environment overrides afterwards.
 
 To verify Classic launching separately, select an earlier installed Classic executable in MCP & Settings, open it, and check its window and independent profile. Close only the test Classic window.
 
@@ -146,6 +146,69 @@ These fixtures establish selected wiring, static facts and optional runtime-base
 
 The optional `-Controls` suite (`node scripts/smoke-controls.cjs`) exercises the 1.3 runtime settings and oracle controls through the actual app UI. It requires the isolated UI environment above, creates a separate sibling test project and uses only source-known Node programs. It checks a project-scoped settings read, invalid-limit rejection without disconnect, Save & reconnect with actual bundled REA 6.8.0 identity, approval disclosure of exact text/hash/JSON-null/absent-file expectations, a passing real file-output oracle, and prompt cancellation of a running 30-second child. Cancellation must reject wrong operation/project identities, leave no completed-child marker and save no comparison report. The script restores the original runtime settings and writes `controls-report.json` in its new test project. Run it sequentially with other UI suites.
 
+
+## Multi-artifact investigation verification
+
+Use the isolated interactive app profile, licensed headless IDA bridge, official MCP SDK and optimized EXE/DLL fixture described above. Set `REA_STUDIO_COMPLEX_ROOT` to the compiled complex fixture, `REA_STUDIO_TEST_DATA` to the dedicated app data directory, and `REA_STUDIO_TEST_CDP` to its debugging URL. IDA and the app MCP listener must start disabled. Run suites sequentially:
+
+```powershell
+node scripts/smoke-investigations.cjs
+```
+
+The script creates a new sibling test root, copies both source-known modules, saves real IDA evidence and drives the investigation panel through create, inspect and export. It also calls all five `studio_investigation` actions through the official MCP client, checks that unconfirmed deletion and irrelevant action arguments fail, and verifies each exported record's ID, artifact identity, raw byte hash and saved content. Changed and missing copies must block export without leaving staging output; restored files permit a fresh bundle. Reload preserves the set, and deleting its metadata preserves originals, evidence and every prior export. No target program or model is executed. Optional `REA_STUDIO_INVESTIGATION_ROOT` must name a new directory; `REA_STUDIO_INVESTIGATION_REPORT` overrides the default JSON receipt path.
+
+The dedicated source suite is `cargo test --release -p quixi-engine analysis::investigations::tests --locked`. It covers project scoping, immutable identities, raw evidence validation, exclusion and failure labels, bounded hashing/history, export cleanup and Windows canonical-path handling. CI runs it separately because the older `analysis::tests` filter does not include the nested investigation module.
+
+## Bounded scale and unnamed-function discovery
+
+From an **x64 Visual Studio Developer PowerShell**, create a separate generated fixture:
+
+```powershell
+$scale = Join-Path $env:TEMP ('rea-scale-fixture-' + [guid]::NewGuid())
+.\scripts\prepare-scale-fixture.ps1 -Destination $scale
+$env:REA_STUDIO_SCALE_ROOT = $scale
+node scripts/smoke-scale.cjs --runtime-only
+# With the isolated app and licensed headless IDA ready:
+node scripts/smoke-scale.cjs
+```
+
+The fixture compiles 2,304 generated functions with optimization and removes fixture-only linker debug metadata while verifying unchanged executable code. It has no application exports, COFF symbol table, debug directory or PDB. The receipt records generator, source, expectation and binary hashes. Runtime-only executes 12 exact output/exit-code cases and marks static analysis skipped.
+
+The static command uses real IDA to page the full function inventory, discover an unnamed quote-calculation feature from its literal string and actual references, inspect decompiled source-known facts and imports, and verify unchanged target bytes. It performs no target execution unless `REA_STUDIO_SCALE_RUNTIME=1`. Paging is bounded by `REA_STUDIO_SCALE_MAX_FUNCTIONS` (default 10,000, permitted 100-50,000), and `REA_STUDIO_SCALE_REPORT` may select a receipt path. Record static and runtime results separately. This synthetic fixture checks bounded paging and one discovery path; it does not establish general stripped-binary recovery, production-scale throughput, packed/obfuscated recovery or application equivalence.
+
+## Native window-close verification
+
+This suite must run as the interactive Windows user. It launches and owns fresh app instances and profiles rather than attaching to an existing window. Choose an unused CDP port and an isolated temporary data root:
+
+```powershell
+$env:QUIXI_TEST_PLAYWRIGHT_MODULE = Join-Path $driver 'node_modules\playwright-core'
+$env:REA_STUDIO_TEST_EXE = (Resolve-Path .\target\release\REAStudio.exe).Path
+$env:REA_STUDIO_TEST_RESOURCES = (Resolve-Path .\resources).Path
+$env:REA_STUDIO_TEST_DATA = Join-Path $env:TEMP ('rea-close-validation-' + [guid]::NewGuid())
+$env:REA_STUDIO_TEST_CDP = 'http://127.0.0.1:9326'
+node scripts/smoke-native-close.cjs
+```
+
+The script sends real native close requests to its own windows. It checks cancellation preserves unsaved buffers; save conflicts do not close; save/discard/clean close produce the correct disk contents; backend terminal and synchronous commands trigger warnings even without UI terminal state; and wrong, unsolicited or cancelled close identities are rejected. Suppressing the renderer acknowledgement must produce an actual native fallback with No as its default. Both No and Yes are exercised. A passing run requires normal app exits, no forced cleanup and no JavaScript errors. Its JSON receipt is saved below the fresh data root. It does not claim protection from operating-system shutdown, crashes or forced process termination.
+
+The validation wrapper accepts `-Investigations`, `-Scale`, `-ScaleRuntime` and `-NativeClose`. Each selected check requires the environment documented above; missing prerequisites fail instead of passing as skipped. `-Scale -ScaleRuntime` runs static and runtime checks together, while `-ScaleRuntime` alone executes only the fixture. It saves separate `investigation-report.json`, `scale-benchmark.json` and `native-close-report.json` receipts in its output directory. For the wrapper's owned close-test instances, use the independent `REA_STUDIO_NATIVE_CLOSE_CDP` URL (default `http://127.0.0.1:9326`); the existing app's `REA_STUDIO_TEST_CDP` is preserved.
+
+```powershell
+.\scripts\run-integration-checks.ps1 -Investigations -Scale -ScaleRuntime -NativeClose
+```
+
+## Recorded 1.4 verification
+
+On 2026-10-28, the coordinated Windows release-mode application, engine and workspace suites reported **100 passed, 0 failed and 2 ignored** (10 app, 74 engine and 16 workspace tests passed). The eight investigation tests and the MCP action/confirmation contract test are included. The two licensed live tests remain explicitly ignored in this run. Workspace type checking and Clippy also completed; existing upstream warnings remain.
+
+The new investigation integration suite passed all seven checks against the actual rebuilt app: two source-known modules with six core IDA evidence records, desktop snapshot creation/inspection, all five MCP actions and negative confirmation checks, changed/missing-input export refusal, restored-input unique export and persisted reload, and metadata deletion preserving raw evidence and earlier bundles. The receipt reported no JavaScript errors.
+
+The existing native UI/Ghidra suite also passed against the 1.4 candidate: real function inventory paging and decompilation, JavaScript analysis, saved evidence and separate dossier export, and a deliberately failing oracle followed by repair and retry handoff. Bundled REA advertised 229 live tools. The official-client MCP suite passed with 28 tools, authentication/origin checks, file and command operations, stale-write/path refusal, imports, unsaved-work preservation, non-secret environment credential handling, listener shutdown and token rotation. Both suites reported no JavaScript errors. The MCP suite's provider reply is a controlled fixture, not a real-model result.
+
+The validation wrapper's separate source/syntax and scale-runtime receipt reported 26 passed, 0 failed and 11 skipped checks; its single runtime check contains the 12 baseline cases. Skipped integrations are not counted as executed.
+
+
+The separately compiled scale fixture passed all 12 runtime baseline cases. Its distinct real-IDA static check then completed 22 pages of 128 entries, ending with a complete terminal page and 2,784 unique functions. String-to-reference discovery found the unnamed quote function, all eight source-known facts, one caller and the required WriteFile/GetStdHandle imports among 75 imports. Source/binary hashes and absence of application exports, COFF symbols and debug metadata were verified; no JavaScript errors occurred. The static run took about 5.1 seconds on this configured host. This is a bounded synthetic paging/discovery result, not a production-scale throughput or reconstruction-equivalence claim. The native-close integration also passed all seven phases in about 40 seconds: cancellation and conflicting-save preservation, successful save, explicit discard, clean close, backend terminal and synchronous-command warnings, and actual native default-No/explicit-Yes fallback. Every owned app exited normally with code zero; no forced cleanup, leftover CDP listener or JavaScript page error was reported.
 
 ## Recorded 1.3 fixture verification
 

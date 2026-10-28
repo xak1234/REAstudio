@@ -55,6 +55,7 @@ jobs:
             @{package='quixi-engine';filter='decompile::tests'},
             @{package='quixi-engine';filter='playground::tests'},
             @{package='quixi-engine';filter='analysis::tests'},
+            @{package='quixi-engine';filter='analysis::investigations::tests'},
             @{package='quixi-engine';filter='reconstruction::tests'},
             @{package='quixi-engine';filter='providers::tests'},
             @{package='quixi-app';filter=''}

@@ -525,6 +525,7 @@ fn tool_catalog() -> Vec<Value> {
         tool("studio_rea_select","Select an existing absolute artifact path for static REA analysis.",json!({"path":string}),&["path"],false),
         tool("studio_rea_call","Call an advertised static REA tool with its exact live arguments. Saves real evidence.",json!({"tool":string,"arguments":{"type":"object"}}),&["tool","arguments"],false),
         tool("studio_rea_evidence","Read a saved evidence record by its UUID.",json!({"id":string}),&["id"],true),
+        tool("studio_investigation","Manage project-scoped, immutable SHA-256 snapshots of named artifact sets. list and inspect read saved sets and current evidence status; create pins local files; export stages a version-pinned evidence bundle without executing targets or claiming complete application coverage. delete removes only snapshot metadata and requires confirmDelete=true; evidence, originals and exported bundles remain.",json!({"action":{"type":"string","enum":["list","create","inspect","export","delete"]},"project":string,"name":{"type":"string","minLength":1,"maxLength":120,"description":"Required only for create."},"targets":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"string"},"description":"Required only for create: absolute local file paths to snapshot."},"id":{"type":"string","format":"uuid","description":"Required for inspect, export and delete: saved investigation ID in this project."},"confirmDelete":{"type":"boolean","description":"Required and true only for delete."}}),&["action","project"],false),
         tool("studio_export_spec","Save a reconstruction dossier into a separate project using an optional completed brief.",json!({"project":string,"scope":{"type":"string","enum":["feature","application"]},"goal":string,"observations":string,"briefId":string}),&["project","scope","goal"],false),
         tool("studio_oracle_preview","Read an oracle suite's cases, SHA-256 and whether the user has approved this exact file. Approval is only possible in the desktop UI.",json!({"project":string,"config":string}),&["project","config"],true),
         tool("studio_oracle_run","Execute a user-approved oracle suite in a project and save actual output comparisons. Refused unless the user approved the file's current SHA-256 in the desktop UI; MCP clients cannot approve.",json!({"project":string,"config":string,"operationId":{"type":"string","description":"Optional caller-generated UUID to cancel this suite using studio_stop_run with id=operationId and project."}}),&["project","config"],false),
@@ -683,6 +684,16 @@ fn dispatch_tool(engine: &Arc<QuixiEngine>, name: &str, args: &Value) -> Result<
         }
         "studio_rea_select" => "rea/select",
         "studio_rea_evidence" => "rea/evidence",
+        "studio_investigation" => {
+            let (route, body) = investigation_request(args)?;
+            if matches!(args["action"].as_str(), Some("create" | "export" | "delete"))
+                && state()?["runs"].as_array().into_iter().flatten()
+                    .any(|r| matches!(r["status"].as_str(), Some("running" | "stopping")))
+            {
+                bail!("Finish or stop the active model task before changing its workspace or REA session");
+            }
+            return Playground::handle(engine, "POST", &route, &body);
+        }
         "studio_export_spec" => "reconstruction-export",
         "studio_oracle_preview" => "oracle-preview",
         "studio_oracle_run" => {
@@ -693,6 +704,49 @@ fn dispatch_tool(engine: &Arc<QuixiEngine>, name: &str, args: &Value) -> Result<
         _ => bail!("Unknown tool"),
     };
     Playground::handle(engine, "POST", route, args)
+}
+
+/// Validate conditional arguments before passing this combined MCP tool to native routes.
+fn investigation_request(args: &Value) -> Result<(String, Value)> {
+    let map = args.as_object().context("Tool arguments must be an object")?;
+    let action = args["action"].as_str().context("Investigation action required")?;
+    let allowed: &[&str] = match action {
+        "list" => &["action", "project"],
+        "create" => &["action", "project", "name", "targets"],
+        "inspect" | "export" => &["action", "project", "id"],
+        "delete" => &["action", "project", "id", "confirmDelete"],
+        _ => bail!("Unsupported investigation action"),
+    };
+    for key in map.keys() {
+        if !allowed.contains(&key.as_str()) {
+            bail!("Argument {key} is not used by investigation action {action}");
+        }
+    }
+    if args["project"].as_str().is_none_or(|p| p.trim().is_empty()) {
+        bail!("Project ID required");
+    }
+    if action == "create" {
+        let name = args["name"].as_str().context("Investigation name required")?.trim();
+        if name.is_empty() || name.chars().count() > 120 || name.chars().any(char::is_control) {
+            bail!("Use an investigation name of 1 to 120 characters without control characters");
+        }
+        let targets = args["targets"].as_array().context("Investigation targets must be an array")?;
+        if targets.is_empty() || targets.len() > 32
+            || targets.iter().any(|v| v.as_str().is_none_or(|s| s.trim().is_empty()))
+        {
+            bail!("Provide 1 to 32 nonempty artifact file paths");
+        }
+    } else if action != "list" {
+        let id = args["id"].as_str().context("Investigation ID required")?;
+        Uuid::parse_str(id).context("Invalid investigation ID")?;
+    }
+    if action == "delete" && args["confirmDelete"].as_bool() != Some(true) {
+        bail!("Deleting investigation metadata requires confirmDelete: true");
+    }
+    let mut body = map.clone();
+    body.remove("action");
+    body.remove("confirmDelete");
+    Ok((format!("investigation/{action}"), Value::Object(body)))
 }
 
 #[cfg(test)]
@@ -742,7 +796,7 @@ mod tests {
     #[test]
     fn ida_tools_are_exposed_with_exact_contracts() {
         let tools = tool_catalog();
-        assert_eq!(tools.len(), 27);
+        assert_eq!(tools.len(), 28);
         assert!(!tools.iter().any(|t| t["name"].as_str().is_some_and(|n| n.contains("approve"))));
         let run = tools.iter().find(|t| t["name"] == "studio_start_run").unwrap();
         let base = json!({"project":"p","prompt":"t","model":"m","mode":"ask"});
@@ -764,5 +818,56 @@ mod tests {
         let status = tools.iter().find(|t| t["name"] == "studio_ida_status").unwrap();
         assert_eq!(status["annotations"]["readOnlyHint"], true);
         assert!(validate_arguments(&status["inputSchema"], &json!({})).is_ok());
+    }
+    #[test]
+    fn investigation_tool_validates_action_specific_arguments_and_delete_confirmation() {
+        let tools = tool_catalog();
+        let tool = tools.iter().find(|t| t["name"] == "studio_investigation").unwrap();
+        let schema = &tool["inputSchema"];
+        assert_eq!(tool["annotations"]["readOnlyHint"], false);
+        assert_eq!(schema["required"], json!(["action", "project"]));
+        for invalid in [
+            json!({"action":"list"}),
+            json!({"action":"replace","project":"p"}),
+            json!({"action":"list","project":"p","unknown":true}),
+            json!({"action":"delete","project":"p","confirmDelete":"true"}),
+        ] {
+            assert!(validate_arguments(schema, &invalid).is_err(), "{invalid}");
+        }
+        let id = Uuid::new_v4().to_string();
+        for invalid in [
+            json!({"action":"list","project":""}),
+            json!({"action":"list","project":"p","id":id}),
+            json!({"action":"inspect","project":"p","id":"not-a-uuid"}),
+            json!({"action":"export","project":"p"}),
+            json!({"action":"delete","project":"p","id":id}),
+            json!({"action":"delete","project":"p","id":id,"confirmDelete":false}),
+            json!({"action":"delete","project":"p","id":id,"confirmDelete":"true"}),
+            json!({"action":"create","project":"p","name":"case"}),
+            json!({"action":"create","project":"p","name":"case","targets":[]}),
+            json!({"action":"create","project":"p","name":"case","targets":[1]}),
+            json!({"action":"create","project":"p","name":"case","targets":[""]}),
+            json!({"action":"create","project":"p","name":"case","targets":["a"],"id":id}),
+            json!({"action":"create","project":"p","name":"in\nvalid","targets":["a"]}),
+        ] {
+            assert!(investigation_request(&invalid).is_err(), "{invalid}");
+        }
+        let create = json!({"action":"create","project":"p","name":"case","targets":["C:\\fixture\\app.exe"]});
+        assert!(validate_arguments(schema, &create).is_ok());
+        let (route, body) = investigation_request(&create).unwrap();
+        assert_eq!(route, "investigation/create");
+        assert_eq!(body, json!({"project":"p","name":"case","targets":["C:\\fixture\\app.exe"]}));
+        for action in ["list", "inspect", "export", "delete"] {
+            let mut args = json!({"action":action,"project":"p"});
+            if action != "list" { args["id"] = json!(id); }
+            if action == "delete" { args["confirmDelete"] = json!(true); }
+            assert!(validate_arguments(schema, &args).is_ok());
+            let (route, body) = investigation_request(&args).unwrap();
+            assert_eq!(route, format!("investigation/{action}"));
+            assert_eq!(body["project"], "p");
+            assert!(body.get("action").is_none());
+            assert!(body.get("confirmDelete").is_none());
+            if action != "list" { assert_eq!(body["id"], id); }
+        }
     }
 }

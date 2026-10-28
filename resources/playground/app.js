@@ -40,7 +40,7 @@ function showView(view) {
   document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===view)));
   document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==`view-${view}`);
   if(view==='changes' && state.project)loadDiff().catch(error);
-  if(view==='analysis'){loadAnalysisHistory().catch(error);refreshAnalysisSources().catch(error);loadRuntimeSettings().catch(error);}
+  if(view==='analysis'){loadAnalysisHistory().catch(error);refreshAnalysisSources().catch(error);loadRuntimeSettings().catch(error);window.QuixiInvestigations?.refresh().catch(error);}
 }
 function showConsole(name) {
   document.querySelectorAll('[data-console]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.console===name)));
@@ -143,14 +143,14 @@ function eventNode(e){
   n.append(s);n.addEventListener('toggle',()=>{if(n.open && !n.querySelector('pre'))n.append(el('pre',JSON.stringify(detail,null,2)));});return n;
 }
 function updateControls(){
-  const active=running(),waiting=active?.status==='awaiting_approval';$('start').disabled=!state.project || !$('model').value || !!active || state.busy || !!state.rea.operation || !!state.rea.connecting || !!state.rea.oracleOperation;$('stop').hidden=!active;$('stop').disabled=active?.status==='stopping';
-  $('project').disabled=!!state.rea.oracleOperation;
+  const active=running(),waiting=active?.status==='awaiting_approval';$('start').disabled=!state.project || !$('model').value || !!active || state.busy || !!state.rea.operation || !!state.rea.connecting || !!state.rea.oracleOperation || !!window.QuixiInvestigations?.busy;$('stop').hidden=!active;$('stop').disabled=active?.status==='stopping';
+  $('project').disabled=!!state.rea.oracleOperation || !!window.QuixiInvestigations?.busy;
   $('composer-hint').textContent=active?(waiting?'The agent is waiting for you to approve a command · open the run to decide.':active.status==='stopping'?'Stopping after the current model request or tool completes.':'Task running · actions appear in Activity'):(state.project?($('mode').value==='code'?'Code mode can edit files and run commands on this computer.':'Ask mode reads files. REA adds static analysis when enabled.'):'Open a project and choose a model.');
   $('status').textContent=active?(waiting?'Run awaiting your approval':`Run ${active.status}`):state.project?'Workspace ready':'Open a project';$('status').classList.toggle('attention',!!waiting);
   $('mode').disabled=!!active;$('model').disabled=!!active;$('rea-enabled').disabled=!!active;$('max-steps').disabled=!!active;$('confirm-commands').disabled=!!active;
   $('received-code-open').disabled=!!active || !!state.rea.operation;
 }
-async function selectProject(id){if(state.rea.oracleOperation){$('project').value=state.project;throw new Error('Stop or finish the oracle checks before switching projects.');}if(!guardDirty()){$('project').value=state.project;return false;}state.project=id;localStorage.setItem('quixi.project',id);state.run='';state.file=null;state.dirty=false;state.continueFrom='';renderContinue();state.rea.oracle=null;gitView.files=null;gitView.selected='';$('reconstruction-dossier').value='';$('oracle-result').hidden=true;renderEditor();renderProjects();renderRuns();updateControls();renderTerminal();await loadFiles();await loadDossiers();if(state.projects.find(p=>p.id===id)?.received)markReceivedSeen(id);return true;}
+async function selectProject(id){if(state.rea.oracleOperation || window.QuixiInvestigations?.busy){$('project').value=state.project;throw new Error('Finish the current oracle or investigation operation before switching projects.');}if(!guardDirty()){$('project').value=state.project;return false;}state.project=id;localStorage.setItem('quixi.project',id);state.run='';state.file=null;state.dirty=false;state.continueFrom='';renderContinue();state.rea.oracle=null;gitView.files=null;gitView.selected='';$('reconstruction-dossier').value='';$('oracle-result').hidden=true;renderEditor();renderProjects();renderRuns();updateControls();renderTerminal();window.dispatchEvent(new Event('rea-project-changed'));await loadFiles();await loadDossiers();if(state.projects.find(p=>p.id===id)?.received)markReceivedSeen(id);return true;}
 async function loadFiles(){if(!state.project){replace('files',[el('p','Project files appear here.','empty')]);return;}
   const id=state.project,t=fileSeq.next(),data=await pg('files',{query:$('filter').value});if(id!==state.project || !fileSeq.current(t))return;state.files=data.files;state.git=data.git;renderFiles();renderGit();}
 const fileSeq=QuixiAnalysis.sequencer();
@@ -357,7 +357,7 @@ function updateAnalysisControls(){
 const historySeq=QuixiAnalysis.sequencer(),recordSeq=QuixiAnalysis.sequencer();
 async function loadAnalysisHistory(){const t=historySeq.next(),result=await pg('rea/inventory');if(!historySeq.current(t))return;state.rea.target=result.target || '';state.rea.targetIsDirectory=!!result.targetIsDirectory;state.rea.records=result.records || [];
   $('artifact-path').textContent=show(state.rea.target) || 'EXE · DLL · .NET · ASAR · JavaScript · archives';$('artifact-path').title=state.rea.target;$('artifact-name').textContent=show(state.rea.target.split(/[\\/]/).pop()) || 'Select an artifact';
-  state.rea.artifactGroups=result.artifactGroups || [];renderArtifactInventory();renderHistory();
+  state.rea.artifactGroups=result.artifactGroups || [];renderArtifactInventory();renderHistory();window.QuixiInvestigations?.updateCandidates();
   renderReconstruction();
   await loadDossiers();
 }

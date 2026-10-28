@@ -1,6 +1,7 @@
 //! Public Windows coding playground shell. Only its native APIs and owned UI assets are exposed.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod close_guard;
 mod mcp_server;
 use quixi_engine::QuixiEngine;
 use std::{
@@ -8,16 +9,17 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 use tao::{
     dpi::LogicalSize,
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoopBuilder},
-    window::WindowBuilder,
+    event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
+    window::{Window, WindowBuilder},
 };
 use wry::{
     http::{header::CONTENT_TYPE, Response},
-    WebContext, WebViewBuilder,
+    PageLoadEvent, WebContext, WebView, WebViewBuilder,
 };
 
 fn resources_dir() -> anyhow::Result<PathBuf> {
@@ -49,6 +51,8 @@ fn static_asset(root: &Path, path: &str) -> Response<Cow<'static, [u8]>> {
         }
         "/playground/app.js" => ("playground/app.js", "text/javascript; charset=utf-8"),
         "/playground/analysis.js" => ("playground/analysis.js", "text/javascript; charset=utf-8"),
+        "/playground/close-guard.js" => ("playground/close-guard.js", "text/javascript; charset=utf-8"),
+        "/playground/investigations.js" => ("playground/investigations.js", "text/javascript; charset=utf-8"),
         "/playground/reconstruction.js" => (
             "playground/reconstruction.js",
             "text/javascript; charset=utf-8",
@@ -85,6 +89,93 @@ fn local_url(url: &str) -> bool {
         .unwrap_or(false)
 }
 
+
+#[derive(Debug)]
+enum HostEvent {
+    CloseMessage(close_guard::Message),
+    PageStarted,
+    NativeCloseDecision { nonce: String, close: bool },
+}
+
+#[cfg(windows)]
+fn confirm_unresponsive_close(hwnd: isize) -> bool {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(hwnd: isize, text: *const u16, caption: *const u16, kind: u32) -> i32;
+    }
+    let text: Vec<u16> = "The interface did not confirm that your work is saved.\n\nClosing now may lose unsaved edits and stop running tasks or checks.\n\nClose REA Studio anyway?"
+        .encode_utf16().chain(Some(0)).collect();
+    let caption: Vec<u16> = "REA Studio — Close without saving?"
+        .encode_utf16().chain(Some(0)).collect();
+    // YES/NO, warning icon, default button No. An API failure is also treated as No.
+    let result = unsafe { MessageBoxW(hwnd, text.as_ptr(), caption.as_ptr(), 0x0004 | 0x0030 | 0x0100) };
+    result == 6
+}
+
+fn request_native_confirmation(
+    window: &Window,
+    guard: &mut close_guard::CloseGuard,
+    proxy: &EventLoopProxy<HostEvent>,
+) {
+    let Some(nonce) = guard.begin_fallback() else { return; };
+    window.set_title("REA Studio — Close not confirmed; waiting for your decision");
+    #[cfg(windows)]
+    {
+        use tao::platform::windows::WindowExtWindows;
+        let hwnd = window.hwnd();
+        let reply_nonce = nonce.clone();
+        let proxy = proxy.clone();
+        // MessageBox pumps Win32 messages. Keep it outside Tao's mutable event callback.
+        if let Err(error) = std::thread::Builder::new().name("rea-close-confirmation".into()).spawn(move || {
+            let close = confirm_unresponsive_close(hwnd);
+            let _ = proxy.send_event(HostEvent::NativeCloseDecision { nonce: reply_nonce, close });
+        }) {
+            tracing::warn!(%error, "Could not show native close confirmation; keeping the window open");
+            let _ = guard.finish_fallback(&nonce, false);
+            window.set_title("REA Studio — Close cancelled; confirmation unavailable");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = proxy;
+        let _ = guard.finish_fallback(&nonce, false);
+        window.set_title("REA Studio — Close cancelled; the interface did not confirm saved work");
+    }
+}
+
+
+fn has_active_work(engine: &QuixiEngine) -> bool {
+    engine.playground.has_active_work()
+        || engine.analysis.is_busy()
+        || engine.ida.is_busy()
+        || engine.debugger.is_busy()
+}
+
+fn request_ui_close(
+    window: &Window,
+    webview: &WebView,
+    guard: &mut close_guard::CloseGuard,
+    request: &mut Option<(String, bool)>,
+    proxy: &EventLoopProxy<HostEvent>,
+    engine: &QuixiEngine,
+    title: &str,
+) {
+    if let Some(nonce) = guard.begin(Instant::now()) {
+        let active_work = request.as_ref()
+            .filter(|(previous, _)| previous == &nonce)
+            .map(|(_, busy)| *busy)
+            .unwrap_or_else(|| has_active_work(engine));
+        *request = Some((nonce.clone(), active_work));
+        window.set_title(title);
+        if let Err(error) = webview.evaluate_script(&close_guard::request_script(&nonce, active_work)) {
+            tracing::warn!(%error, "Could not ask the interface to confirm close");
+            let _ = guard.invalidate();
+            *request = None;
+            request_native_confirmation(window, guard, proxy);
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -103,12 +194,13 @@ fn main() -> anyhow::Result<()> {
     let engine = QuixiEngine::new(resources.clone());
     let mcp = Arc::new(mcp_server::McpServer::new(&engine.data_dir));
     let api_mcp = Arc::clone(&mcp);
-    let event_loop = EventLoopBuilder::<()>::new().build();
+    let event_loop = EventLoopBuilder::<HostEvent>::with_user_event().build();
+    let event_proxy = event_loop.create_proxy();
+    let ipc_proxy = event_proxy.clone();
+    let load_proxy = event_proxy.clone();
+    let title = format!("REA Studio V{} · Coding & Reverse Engineering", env!("CARGO_PKG_VERSION"));
     let window = WindowBuilder::new()
-        .with_title(format!(
-            "REA Studio V{} · Coding & Reverse Engineering",
-            env!("CARGO_PKG_VERSION")
-        ))
+        .with_title(&title)
         .with_inner_size(LogicalSize::new(1440.0, 920.0))
         .with_min_inner_size(LogicalSize::new(480.0, 360.0))
         .with_visible(false)
@@ -125,6 +217,16 @@ fn main() -> anyhow::Result<()> {
         .with_devtools(
             cfg!(debug_assertions) || std::env::var("QUIXI_DEVTOOLS").as_deref() == Ok("1"),
         )
+        .with_ipc_handler(move |request| {
+            if let Some(message) = close_guard::parse_message(&request.uri().to_string(), request.body()) {
+                let _ = ipc_proxy.send_event(HostEvent::CloseMessage(message));
+            }
+        })
+        .with_on_page_load_handler(move |event, _url| {
+            if matches!(event, PageLoadEvent::Started) {
+                let _ = load_proxy.send_event(HostEvent::PageStarted);
+            }
+        })
         .with_navigation_handler(|url| {
             if local_url(&url) {
                 return true;
@@ -207,19 +309,79 @@ fn main() -> anyhow::Result<()> {
         .with_url("app://localhost/playground")
         .build(&window)?;
     window.set_visible(true);
+    let mut close_guard = close_guard::CloseGuard::default();
+    let mut close_request: Option<(String, bool)> = None;
+    let mut closing = false;
     event_loop.run(move |event, _, control_flow| {
-        let _keep_webview_alive = &webview;
-        *control_flow = ControlFlow::Wait;
-        if let Event::WindowEvent {
-            event: WindowEvent::CloseRequested,
-            ..
-        } = event
-        {
+        if closing {
+            *control_flow = ControlFlow::Exit;
+            return;
+        }
+        let mut allow_close = false;
+        if matches!(&event, Event::UserEvent(HostEvent::PageStarted)) {
+            let _ = close_guard.invalidate();
+            close_request = None;
+            window.set_title(&title);
+        } else if let Some(expired) = close_guard.expire(Instant::now()) {
+            close_request = None;
+            let reason = match expired.reason {
+                close_guard::ExpiryReason::Unresponsive => "unresponsive",
+                close_guard::ExpiryReason::DecisionExpired => "expired",
+            };
+            let _ = webview.evaluate_script(&close_guard::cancelled_script(&expired.nonce, reason));
+            if expired.reason == close_guard::ExpiryReason::Unresponsive {
+                request_native_confirmation(&window, &mut close_guard, &event_proxy);
+            } else {
+                window.set_title(&format!("{title} — Close cancelled; please try again"));
+            }
+            // Do not process the event that expired the nonce as a second close request.
+        } else {
+            match event {
+                Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                    request_ui_close(&window, &webview, &mut close_guard, &mut close_request, &event_proxy, &engine, &title);
+                }
+                Event::UserEvent(HostEvent::CloseMessage(message)) => {
+                    match close_guard.receive(message, Instant::now()) {
+                        Some(close_guard::Decision::Close) => {
+                            let previous = close_request.take();
+                            let work_was_disclosed = previous.as_ref().is_some_and(|(_, busy)| *busy);
+                            if !work_was_disclosed && has_active_work(&engine) {
+                                // An MCP request can begin work after the first snapshot.
+                                // Reopen the prompt with a new nonce before stopping that work.
+                                if let Some((nonce, _)) = previous {
+                                    let _ = webview.evaluate_script(&close_guard::cancelled_script(&nonce, "work_started"));
+                                }
+                                request_ui_close(&window, &webview, &mut close_guard, &mut close_request, &event_proxy, &engine, &title);
+                            } else {
+                                allow_close = true;
+                            }
+                        }
+                        Some(close_guard::Decision::Cancel) => {
+                            close_request = None;
+                            window.set_title(&title);
+                        }
+                        None => {}
+                    }
+                }
+                Event::UserEvent(HostEvent::NativeCloseDecision { nonce, close }) => {
+                    match close_guard.finish_fallback(&nonce, close) {
+                        Some(close_guard::Decision::Close) => allow_close = true,
+                        Some(close_guard::Decision::Cancel) => window.set_title(&title),
+                        None => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        if allow_close {
+            closing = true;
             mcp.stop();
             engine.rea.shutdown();
             engine.debugger.plugin.shutdown();
             engine.ida.shutdown();
             *control_flow = ControlFlow::Exit;
+        } else {
+            *control_flow = close_guard.deadline().map(ControlFlow::WaitUntil).unwrap_or(ControlFlow::Wait);
         }
     });
 }

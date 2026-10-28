@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.4.0 — 2026-10-28
+
+### Multi-artifact investigations
+- Save named, immutable sets of local files with SHA-256 identities, scoped to the current project. Inspect each file's current, changed, missing or unavailable state and its matching, excluded, failed and model-suggestion evidence counts.
+- Export staged, version-pinned evidence bundles with original saved records, raw-record hashes, exclusion reasons and explicit modules with no evidence. Recheck every artifact before publishing; refuse changed inputs, empty overall evidence or exceeded bounds without replacing earlier bundles.
+- Stream artifact hashes with per-file and aggregate limits, bound history scans, and reject ambiguous or reparse-based paths. Preserve the existing single-artifact analysis and reconstruction workflow.
+- Add desktop investigation controls and the project-scoped `studio_investigation` MCP tool. Deleting metadata requires explicit MCP confirmation and preserves source files, evidence and exported bundles.
+
+### Native window close
+- Negotiate native close requests with the editor: cancel, save and close, or close without saving. A failed or conflicting save leaves the editor open.
+- Warn about active backend work even when it was started outside the current UI; include synchronous commands and investigation operations.
+- Validate close request identities and reject stale or unsolicited replies. An unresponsive renderer falls back to a native confirmation that defaults to keeping the app open.
+
+### Verification
+- Add focused investigation integrity tests and a dedicated CI suite, plus genuine UI/MCP investigation and native-window-close smoke scripts.
+- Add an optimized source-known fixture with 2,304 generated functions and no application exports, COFF symbol table or debug directory. Its optional runtime baseline and real IDA paging/string-reference discovery report separate results; it is not a production-scale or general symbol-recovery benchmark.
+
 ## 1.3.0 — 2026-10-28
 
 ### Investigation integrity

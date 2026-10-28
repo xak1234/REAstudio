@@ -1570,6 +1570,15 @@ pub struct TerminalJobs {
 }
 
 impl TerminalJobs {
+    /// A close prompt must not wait for a running job or its output lock.
+    /// Contention/poisoning is conservatively reported as active work.
+    pub fn has_active_jobs(&self) -> bool {
+        let Ok(jobs) = self.jobs.try_lock() else { return true; };
+        jobs.values().any(|job| {
+            job.shared.try_lock().map(|shared| !shared.done).unwrap_or(true)
+        })
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -2014,6 +2023,43 @@ impl TranscriptSearchEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_work_status_is_conservative_without_waiting_for_terminal_locks() {
+        fn from_another_thread(jobs: TerminalJobs) -> bool {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                sender.send(jobs.has_active_jobs()).unwrap();
+            });
+            let value = receiver.recv_timeout(Duration::from_secs(2))
+                .expect("close status blocked on a terminal lock");
+            worker.join().unwrap();
+            value
+        }
+        let jobs = TerminalJobs::new();
+        assert!(!jobs.has_active_jobs());
+        let shared = Arc::new(Mutex::new(JobShared::default()));
+        jobs.jobs.lock().unwrap().insert("close-status".into(), TerminalJob {
+            scope: "test".into(),
+            root: PathBuf::new(),
+            shell: "not-launched".into(),
+            shared: Arc::clone(&shared),
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+        assert!(jobs.has_active_jobs());
+        shared.lock().unwrap().done = true;
+        assert!(!jobs.has_active_jobs());
+        {
+            let _locked_output = shared.lock().unwrap();
+            assert!(from_another_thread(jobs.clone()));
+        }
+        {
+            let _locked_jobs = jobs.jobs.lock().unwrap();
+            assert!(from_another_thread(jobs.clone()));
+        }
+        assert!(!jobs.has_active_jobs());
+    }
+
 
     #[test]
     fn test_file_index_git_and_shell_engines() {

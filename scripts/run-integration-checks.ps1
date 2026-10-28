@@ -8,7 +8,11 @@ param(
     [switch]$Debugger,
     [switch]$Specialist,
     [switch]$Complex,
-    [switch]$ComplexRuntime
+    [switch]$ComplexRuntime,
+    [switch]$Investigations,
+    [switch]$Scale,
+    [switch]$ScaleRuntime,
+    [switch]$NativeClose
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -19,6 +23,11 @@ $checks = [Collections.Generic.List[object]]::new()
 $started = [DateTime]::UtcNow
 $previousReport = $env:REA_STUDIO_BENCHMARK_REPORT
 $previousRuntime = $env:REA_STUDIO_COMPLEX_RUNTIME
+$previousScaleReport = $env:REA_STUDIO_SCALE_REPORT
+$previousScaleRuntime = $env:REA_STUDIO_SCALE_RUNTIME
+$previousInvestigationReport = $env:REA_STUDIO_INVESTIGATION_REPORT
+$previousNativeCloseReport = $env:REA_STUDIO_NATIVE_CLOSE_REPORT
+$previousCdp = $env:REA_STUDIO_TEST_CDP
 function Invoke-NodeCheck {
     param([string]$Name, [string[]]$Arguments, [bool]$Selected = $true, [string[]]$RequiredEnvironment = @())
     $row = [ordered]@{name=$Name;status='skipped';durationMs=0;reason='Not selected; no integration was executed.'}
@@ -55,7 +64,7 @@ try {
     Invoke-NodeCheck 'version' @('scripts/check-version.mjs')
     Invoke-NodeCheck 'analysis-contract' @('scripts/check-analysis.cjs')
     Invoke-NodeCheck 'reconstruction-contract' @('scripts/check-reconstruction.cjs')
-    $syntaxFiles = @('resources/playground/app.js','resources/playground/analysis.js','resources/playground/reconstruction.js')
+    $syntaxFiles = @('resources/playground/app.js','resources/playground/analysis.js','resources/playground/reconstruction.js','resources/playground/close-guard.js','resources/playground/investigations.js','scripts/fixtures/scale/generate.cjs')
     $syntaxFiles += @(Get-ChildItem (Join-Path $PSScriptRoot '*.cjs') -File | ForEach-Object { 'scripts/' + $_.Name })
     foreach ($file in $syntaxFiles) { Invoke-NodeCheck ('syntax-' + [IO.Path]::GetFileNameWithoutExtension($file)) @('--check', $file) }
     $uiEnvironment = @('QUIXI_TEST_PLAYWRIGHT_MODULE','QUIXI_SMOKE_ROOT','REA_STUDIO_TEST_DATA','REA_STUDIO_TEST_CDP')
@@ -73,10 +82,30 @@ try {
         Invoke-NodeCheck 'complex-static' @('scripts/smoke-complex.cjs') $false
         Invoke-NodeCheck 'complex-runtime' @('scripts/smoke-complex.cjs','--runtime-only') $ComplexRuntime.IsPresent @('REA_STUDIO_COMPLEX_ROOT')
     }
+    $dedicatedUiEnvironment = @('QUIXI_TEST_PLAYWRIGHT_MODULE','REA_STUDIO_TEST_DATA','REA_STUDIO_TEST_CDP')
+    $env:REA_STUDIO_INVESTIGATION_REPORT = Join-Path $out 'investigation-report.json'
+    Invoke-NodeCheck 'investigations' @('scripts/smoke-investigations.cjs') $Investigations.IsPresent ($dedicatedUiEnvironment + @('REA_STUDIO_TEST_SDK','REA_STUDIO_COMPLEX_ROOT'))
+    $env:REA_STUDIO_SCALE_REPORT = Join-Path $out 'scale-benchmark.json'
+    $env:REA_STUDIO_SCALE_RUNTIME = if ($ScaleRuntime) { '1' } else { '0' }
+    if ($Scale) {
+        Invoke-NodeCheck 'scale-static' @('scripts/smoke-scale.cjs') $true ($dedicatedUiEnvironment + @('REA_STUDIO_SCALE_ROOT'))
+    } else {
+        Invoke-NodeCheck 'scale-static' @('scripts/smoke-scale.cjs') $false
+        Invoke-NodeCheck 'scale-runtime' @('scripts/smoke-scale.cjs','--runtime-only') $ScaleRuntime.IsPresent @('REA_STUDIO_SCALE_ROOT')
+    }
+    $env:REA_STUDIO_NATIVE_CLOSE_REPORT = Join-Path $out 'native-close-report.json'
+    # This test owns its app processes and requires an unused CDP endpoint.
+    $env:REA_STUDIO_TEST_CDP = if ($env:REA_STUDIO_NATIVE_CLOSE_CDP) { $env:REA_STUDIO_NATIVE_CLOSE_CDP } else { 'http://127.0.0.1:9326' }
+    Invoke-NodeCheck 'native-close' @('scripts/smoke-native-close.cjs') $NativeClose.IsPresent @('QUIXI_TEST_PLAYWRIGHT_MODULE','REA_STUDIO_TEST_EXE','REA_STUDIO_TEST_RESOURCES','REA_STUDIO_TEST_DATA')
 } finally {
     Pop-Location
     $env:REA_STUDIO_BENCHMARK_REPORT = $previousReport
     $env:REA_STUDIO_COMPLEX_RUNTIME = $previousRuntime
+    $env:REA_STUDIO_SCALE_REPORT = $previousScaleReport
+    $env:REA_STUDIO_SCALE_RUNTIME = $previousScaleRuntime
+    $env:REA_STUDIO_INVESTIGATION_REPORT = $previousInvestigationReport
+    $env:REA_STUDIO_NATIVE_CLOSE_REPORT = $previousNativeCloseReport
+    $env:REA_STUDIO_TEST_CDP = $previousCdp
     $finished = [DateTime]::UtcNow
     $result = [ordered]@{
         version=1;startedAt=$started.ToString('o');finishedAt=$finished.ToString('o');durationMs=[Math]::Round(($finished-$started).TotalMilliseconds)

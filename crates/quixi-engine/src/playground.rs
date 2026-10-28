@@ -12,7 +12,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}},
 };
 use uuid::Uuid;
 
@@ -149,9 +149,21 @@ pub struct Playground {
     /// reviewed: Ok = approved, Err = denied.
     decisions: Mutex<HashMap<String, Decision>>,
     terminal: quixi_workspace::TerminalJobs,
+    pending_commands: AtomicUsize,
     oracle_operation: Mutex<Option<OracleOperation>>,
     /// path -> (length, modified, sha256) so listing runs does not rehash unchanged files.
     hash_cache: Mutex<HashMap<PathBuf, (u64, std::time::SystemTime, String)>>,
+}
+
+struct CommandLease<'a>(&'a AtomicUsize);
+impl<'a> CommandLease<'a> {
+    fn new(counter: &'a AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::AcqRel);
+        Self(counter)
+    }
+}
+impl Drop for CommandLease<'_> {
+    fn drop(&mut self) { self.0.fetch_sub(1, Ordering::Release); }
 }
 
 struct OracleOperation {
@@ -258,6 +270,7 @@ impl Playground {
             approvals: Mutex::new(()),
             decisions: Mutex::new(HashMap::new()),
             terminal: quixi_workspace::TerminalJobs::new(),
+            pending_commands: AtomicUsize::new(0),
             oracle_operation: Mutex::new(None),
             hash_cache: Mutex::new(HashMap::new()),
         }
@@ -281,6 +294,16 @@ impl Playground {
             .context("This oracle operation is no longer active in this project")?;
         operation.cancelled.store(true, Ordering::Release);
         Ok(json!({"operationId":id,"cancellationRequested":true}))
+    }
+
+    /// A native close check must never wait behind a worker that owns a lock.
+    pub fn has_active_work(&self) -> bool {
+        if self.pending_commands.load(Ordering::Acquire) != 0 { return true; }
+        let runs_active = self.runs.try_lock().is_none_or(|runs| {
+            runs.values().any(|run| active_status(&run.status))
+        });
+        let oracle_active = self.oracle_operation.try_lock().is_none_or(|slot| slot.is_some());
+        runs_active || oracle_active || self.files.try_lock().is_none() || self.terminal.has_active_jobs()
     }
 
     fn project(&self, body: &Value) -> Result<Project> {
@@ -838,6 +861,10 @@ impl Playground {
             bail!("This operation requires POST");
         }
         if route == "import" { return pg.import_code(body); }
+        if let Some(operation) = route.strip_prefix("investigation/") {
+            let project = pg.project(body)?;
+            return engine.analysis.handle_investigation(Path::new(&project.path), operation, body);
+        }
         if let Some(operation) = route.strip_prefix("rea/") {
             return crate::analysis::AnalysisWorkspace::handle(engine, operation, body);
         }
@@ -1013,7 +1040,10 @@ impl Playground {
                 Ok(result)
             }
             "oracle-stop" => pg.stop_oracle(&project.id, field(body, "operationId")?),
-            "command" => ShellHostEngine::run_bash_command(root, field(body, "command")?),
+            "command" => {
+                let _lease = CommandLease::new(&pg.pending_commands);
+                ShellHostEngine::run_bash_command(root, field(body, "command")?)
+            }
             "run" => {
                 let prompt = field(body, "prompt")?.trim();
                 if prompt.is_empty() {

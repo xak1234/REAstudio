@@ -14,6 +14,8 @@ use std::{
 };
 use uuid::Uuid;
 
+mod investigations;
+
 /// Summaries of saved records, so listing does not parse every full response.
 const INDEX_FILE: &str = "index.json";
 
@@ -28,6 +30,7 @@ pub struct AnalysisWorkspace {
     /// Keep snapshots, the provider operation and evidence attribution together.
     operation: Mutex<()>,
     index: Mutex<()>,
+    investigation_lock: Mutex<()>,
 }
 
 /// True for UNC, device and non-disk verbatim paths. Touching these (even
@@ -347,6 +350,7 @@ mod tests {
             rea_identity: Mutex::new(None),
             operation: Mutex::new(()),
             index: Mutex::new(()),
+            investigation_lock: Mutex::new(()),
         }
     }
 
@@ -717,6 +721,11 @@ mod tests {
     }
 }
 impl AnalysisWorkspace {
+    /// Read-only native-close check; never waits behind a provider or file hash.
+    pub fn is_busy(&self) -> bool {
+        self.operation.try_lock().is_none() || self.investigation_lock.try_lock().is_none()
+    }
+
     /// `transport_failed`: the call itself failed (connection lost, timeout and
     /// cancellation, protocol error), so no provider session can be assumed.
     fn observe_provider_result(&self, tool: &str, evidence: &Value, failed: bool, transport_failed: bool, process_id: u32) {
@@ -791,6 +800,7 @@ impl AnalysisWorkspace {
             rea_identity: Mutex::new(None),
             operation: Mutex::new(()),
             index: Mutex::new(()),
+            investigation_lock: Mutex::new(()),
         }
     }
     /// Reads summaries from the sidecar index. Only records missing from it are

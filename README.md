@@ -1,7 +1,7 @@
 <div align="center">
 <img src="resources/rea-logo.svg" alt="REA Studio" width="220">
 
-# REA Studio V1.3.0
+# REA Studio V1.4.0
 
 **A native coding playground with an integrated REA reverse engineering workspace.**
 
@@ -10,7 +10,7 @@
 
 REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. Its dark playground layout keeps the project on the left, work in the centre, and model/tool settings on the right.
 
-**V1.3.0 (package version 1.3.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
+**V1.4.0 (package version 1.4.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
 
 This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/QuixiAI/QuixiDesk), with a separately implemented playground UI and the upstream MIT attribution preserved. It is an independent community project. It does not include the upstream Classic renderer, extracted application assets, proprietary fonts, example account data, or local machine configuration. See [NOTICE.md](NOTICE.md) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled components.
 
@@ -26,6 +26,7 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 | Ask mode | Read project files and answer questions; optional static REA tools can inspect a selected artifact. |
 | Code mode | Read/write files and run commands as the signed-in Windows user. |
 | REA plugin | Persistent MCP connection, live tool schemas and availability, artifact selection, recovered code, and saved JSON evidence. |
+| Investigations | Named immutable snapshots of related files, per-module identity/evidence status, staged evidence bundles and desktop/MCP access. |
 | Reconstruction | Binary → REA → SPEC.md → rebuild → oracle → retry, with separate implementation runs and persisted evidence/comparison reports. |
 | Analysis sources | Installed-tool selector, green live connection indicators, REA providers (Ghidra, IDA attached or headless), x64dbg observations, and imported reports. |
 | IDA Pro bridge | Headless (idalib) or attached IDA with live tools, Hex-Rays pseudocode, xrefs/call graphs, persistent renames/comments/types in a private IDB, evidence records, and agent/MCP access. |
@@ -36,6 +37,14 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 | Providers | API-key providers and local/custom OpenAI-compatible endpoints; model selection and connection testing. |
 
 This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY (commands cannot read keyboard input), a full debugger UI, Git branch/push/pull operations, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
+
+### Multi-artifact investigations and close protection in V1.4
+
+Use **Investigations** in the reverse engineering panel to collect related EXE, DLL or other local files under a named snapshot. Add the selected artifact or use **Add analysed files**, review the list, and capture immutable SHA-256 identities. **Check files** shows each file's current, changed, missing or unavailable state and its saved evidence counts. New builds need a new snapshot; existing snapshots remain available.
+
+Export a version-pinned evidence bundle into a separate project. Its manifest includes original saved records, record hashes, exclusion reasons, failed observations, unverified model suggestions and modules without matching evidence. Every input is rechecked before the staged directory becomes final. No target is executed or copied, and explicit size/count limits prevent partial coverage from being silently presented as complete. The existing single-artifact dossier and reconstruction flow remains available. See [Investigations](docs/INVESTIGATIONS.md) for storage, bounds and bundle semantics; [MCP control](docs/MCP.md) documents the same workflow through `studio_investigation`.
+
+Closing the native window now offers **Keep working**, **Save & close**, or **Close without saving** when the editor has unsaved work. A save conflict keeps the editor open. Active tasks, commands and analysis are disclosed even when they started through backend APIs. If the interface cannot respond, a native confirmation defaults to keeping the app open.
 
 ### Investigation controls in V1.3
 
@@ -61,11 +70,11 @@ No global Node, Java, Ghidra, npm, Rust, or administrator installation is needed
 
 ## Install and run
 
-1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.3.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
+1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.4.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
 2. Verify the ZIP in PowerShell:
 
    ```powershell
-   $archive = '.\REA-Studio-1.3.0-x64.zip'
+   $archive = '.\REA-Studio-1.4.0-x64.zip'
    $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
    $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
    if ($actual -ne $expected) { throw 'Checksum mismatch: download the release again.' }
@@ -256,9 +265,10 @@ cargo test --release -p quixi-platform --locked
 cargo test --release -p quixi-workspace --locked
 cargo test --release -p quixi-engine playground::tests --locked
 cargo test --release -p quixi-engine analysis::tests --locked
+cargo test --release -p quixi-engine analysis::investigations::tests --locked
 cargo test --release -p quixi-engine reconstruction::tests --locked
 cargo test --release -p quixi-engine providers::tests --locked
-cargo test --release -p quixi-app mcp_server::tests --locked
+cargo test --release -p quixi-app --locked
 ```
 
 Clippy warnings inherited from shared upstream modules may remain; a successful check is not a claim that all upstream warnings were removed. The entire legacy test suite is not used as a Windows compatibility claim.

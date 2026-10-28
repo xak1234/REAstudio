@@ -149,6 +149,9 @@ fn restore_rea_paths(paths_file: &Path) -> Result<Value> {
 }
 
 impl IdaWorkspace {
+    /// Conservative, nonblocking snapshot for the native close confirmation.
+    pub fn is_busy(&self) -> bool { self.operation.try_lock().is_none() }
+
     pub fn connected(&self) -> bool {
         if let Some(mut guard) = self.connection.try_lock() {
             if guard.as_mut().is_some_and(|c| !c.alive()) {
