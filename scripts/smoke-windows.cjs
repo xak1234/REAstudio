@@ -11,6 +11,32 @@ const {version} = require('./version.cjs');
   page.setDefaultTimeout(20000);
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const call=(route,data={})=>page.evaluate(async({route,data})=>{const r=await fetch('/api/quixi/playground/'+route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const v=await r.json();if(!r.ok)throw new Error(JSON.stringify(v));return v;},{route,data});
+  const runOracleThroughUi=async()=>{
+    await page.locator('#oracle-run').click();
+    await page.locator('#oracle-consent').waitFor({state:'visible'});
+    assert.match(await page.locator('#oracle-consent-sha').textContent(),/[a-f0-9]{64}/i);
+    await page.locator('#oracle-approve').click();
+    await page.locator('#oracle-consent').waitFor({state:'hidden'});
+    await page.locator('#oracle-result').waitFor({state:'visible'});
+    await page.waitForFunction(()=>!state.rea.oracleOperation && state.rea.oracle && ['passed','failed','unverified'].includes(state.rea.oracle.status));
+  };
+  const readDisplayedRecord=async(tool,offset=null,expectedId=null)=>{
+    try {
+      await page.waitForFunction(({tool,offset,expectedId})=>{
+        const record=state.rea.record,view=record && QuixiAnalysis.nativeView(unwrap(record.response));
+        const matches=record?.tool===tool || (record?.tool==='inspect_analysis_view' && view?.parent_operation===tool);
+        return !state.rea.operation && matches && (expectedId===null || record.id===expectedId) && (offset===null || record.arguments?.view?.offset===offset);
+      },{tool,offset,expectedId});
+    } catch(error) {
+      const diagnostics=await page.evaluate(()=>({operation:state.rea.operation,tool:state.rea.record?.tool,
+        arguments:state.rea.record?.arguments,view:state.rea.record && QuixiAnalysis.nativeView(unwrap(state.rea.record.response)),
+        health:document.getElementById('rea-health').textContent}));
+      error.message+='\nDisplayed-record diagnostics: '+JSON.stringify(diagnostics);throw error;
+    }
+    await page.locator('#evidence-raw').evaluate(node=>{node.open=true;});
+    await page.waitForFunction(expectedId=>{try{const record=JSON.parse(document.getElementById('rea-output').textContent);return !!record.tool && (expectedId===null || record.id===expectedId);}catch{return false;}},expectedId);
+    return JSON.parse(await page.locator('#rea-output').textContent());
+  };
   const root=process.env.QUIXI_SMOKE_ROOT;
   assert(root,'Set QUIXI_SMOKE_ROOT to a dedicated fixture project with README.md, app.js and quixi-fixture.exe');
   const project=await call('project',{path:root});
@@ -57,16 +83,17 @@ const {version} = require('./version.cjs');
   await page.locator('[data-rea-tool=list_procedures]').click();await page.locator('#rea-run').click();
   await page.locator('.inventory-table').waitFor({timeout:90000});
   await page.waitForFunction(()=>!document.getElementById('rea-run').disabled);
-  const inventory=JSON.parse(await page.locator('#rea-output').textContent());
+  const inventory=await readDisplayedRecord('list_procedures');
   assert.equal(inventory.failed,false);
+  assert.equal(inventory.response.structuredContent.normalized_result.parent_operation,'list_procedures');
   const retained=inventory.response.structuredContent.normalized_result.parent_evidence_id;
   await page.evaluate(async retained=>{await executeAnalysis('inspect_analysis_view',{source:{kind:'retained-evidence',evidence_id:retained},view:{kind:'native-inventory',offset:0,limit:1}},false);},retained);
   assert.equal(await page.locator('.inventory-table tbody tr').count(),1);
   await page.locator('.inventory-pagination button').filter({hasText:'Next page'}).click();
-  await page.waitForFunction(()=>JSON.parse(document.getElementById('rea-output').textContent).arguments.view.offset===1);
+  await readDisplayedRecord('inspect_analysis_view',1);
   await page.waitForFunction(()=>!document.querySelector('.inventory-pagination button').disabled);
   await page.locator('.inventory-pagination button').filter({hasText:'Previous page'}).click();
-  await page.waitForFunction(()=>JSON.parse(document.getElementById('rea-output').textContent).arguments.view.offset===0);
+  await readDisplayedRecord('inspect_analysis_view',0);
   await page.waitForFunction(()=>!document.querySelector('.inventory-pagination button').disabled);
   await page.locator('[data-rea-tool=search_procedures]').click();await page.locator('#rea-input-pattern').fill('quixi_add');await page.locator('#rea-run').click();
   await page.locator('.inventory-table tbody tr').filter({hasText:'quixi_add'}).waitFor({timeout:90000});
@@ -82,10 +109,14 @@ const {version} = require('./version.cjs');
   const js=await call('rea/tool',{tool:'analyze_javascript_application',arguments:{input_path:root,detail:'summary'}});
   fs.writeFileSync(root+'\\rea-javascript.json',JSON.stringify(js,null,2));assert.equal(js.failed,false,JSON.stringify(js).slice(0,2000));
   await page.locator('[data-view=analysis]').click();await page.locator('#rea-record').selectOption(code.id);
-  await page.waitForFunction(()=>document.getElementById('rea-output').textContent.includes('procedure_pseudo_code'));
+  await readDisplayedRecord('procedure_pseudo_code',null,code.id);
   const recovered=await call('rea/evidence',{id:code.id});assert.deepEqual(recovered,code);
   await page.locator('#toolchain-open').click();
-  await page.waitForFunction(()=>document.querySelectorAll('.toolchain-row').length===21);
+  const inventoryTools=await call('toolchain/inventory');
+  for(const id of ['rea','ghidra','ida-headless','ida-bridge','x64dbg','workflows']) {
+    assert(inventoryTools.tools.some(tool=>tool.id===id),`Expected toolchain entry ${id}`);
+  }
+  await page.waitForFunction(count=>document.querySelectorAll('.toolchain-row').length===count,inventoryTools.tools.length);
   await page.locator('#toolchain-dialog summary').filter({hasText:'Bundled REA workflows'}).click();
   await page.locator('#workflow-read').click();
   await page.waitForFunction(()=>document.getElementById('workflow-content').textContent.includes('rea-agents 6.8.0'));
@@ -104,22 +135,23 @@ const {version} = require('./version.cjs');
   await page.locator('[data-view=analysis]').click();
   await page.locator('#reconstruction-export').click();
   await page.waitForFunction(()=>document.getElementById('reconstruction-status').textContent.includes('Saved SPEC.md'));
+  await page.waitForFunction(()=>document.getElementById('reconstruction-dossier').value && !document.getElementById('oracle-run').disabled);
   const dossier=await page.locator('#reconstruction-dossier').inputValue();assert(dossier);
   const manifest=JSON.parse(fs.readFileSync(destination+'\\'+dossier+'\\manifest.json','utf8'));
   assert(manifest.records.some(r=>r.id===native.id));assert(!manifest.records.some(r=>r.id===js.id));
   assert(fs.existsSync(destination+'\\'+dossier+'\\SPEC.md'));
-  await page.locator('#mode').selectOption('code');await page.locator('#oracle-run').click();
+  await page.locator('#mode').selectOption('code');await runOracleThroughUi();
   await page.waitForFunction(()=>document.getElementById('oracle-result').textContent.includes('unverified'));
   const calc=destination+'\\calc.ps1';fs.writeFileSync(calc,"param([int]$a,[int]$b)\n[Console]::Write($a+$b+1)\n");
   const config=destination+'\\'+dossier+'\\oracle-cases.json';
   fs.writeFileSync(config,JSON.stringify({version:1,cases:[{id:'addition',requirement:'REQ-001',command:"& '.\\calc.ps1' 19 23",expectationSource:'Compiled quixi_add fixture arithmetic: 19 + 23 = 42',expected:{exitCode:0,stdout:'42',stderr:''}}]}));
-  await page.locator('#oracle-run').click();
+  await runOracleThroughUi();
   await page.waitForFunction(()=>document.getElementById('oracle-result').textContent.includes('stdout differs'));
   assert.equal(await page.locator('#oracle-retry').isDisabled(),false);
   await page.locator('#oracle-retry').click();assert.equal(await page.locator('#rea-enabled').isChecked(),false);
   assert.match(await page.locator('#task').inputValue(),/actual oracle failure report/);
   fs.writeFileSync(calc,"param([int]$a,[int]$b)\n[Console]::Write($a+$b)\n");
-  await page.locator('[data-view=analysis]').click();await page.locator('#oracle-run').click();
+  await page.locator('[data-view=analysis]').click();await runOracleThroughUi();
   await page.waitForFunction(()=>{try{return JSON.parse(document.getElementById('oracle-result').textContent).status==='passed';}catch{return false;}});
   const oracle=JSON.parse(await page.locator('#oracle-result').textContent());assert.equal(oracle.passed,1);
   assert(fs.existsSync(destination+'\\'+oracle.reportPath));

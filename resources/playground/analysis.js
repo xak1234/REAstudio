@@ -171,8 +171,16 @@ const QuixiAnalysis = (() => {
       const argv = typeof c?.command !== 'string' && Array.isArray(c?.argv);
       const command = argv ? c.argv.map(/** @param {any} a */ a => quoteArg(String(a))).join(' ') : typeof c?.command === 'string' ? c.command : '';
       const expectations = [];
-      if (c?.exitCode !== undefined && c.exitCode !== null) expectations.push(`exit code ${c.exitCode}`);
-      for (const k of ['stdout', 'stderr']) if (c?.[k] !== undefined && c[k] !== null) expectations.push(`${k}: ${typeof c[k] === 'string' ? c[k] : JSON.stringify(c[k])}`);
+      const expected = c?.expected || c;
+      if (expected?.exitCode !== undefined && expected.exitCode !== null) expectations.push(`exit code ${expected.exitCode}`);
+      for (const k of ['stdout', 'stderr']) if (expected?.[k] !== undefined && expected[k] !== null) expectations.push(`${k}: ${typeof expected[k] === 'string' ? expected[k] : JSON.stringify(expected[k])}`);
+      if (c?.timeoutSeconds) expectations.push(`timeout: ${c.timeoutSeconds} seconds`);
+      for (const file of Array.isArray(expected?.files) ? expected.files : []) {
+        expectations.push(`file ${file.path}: ${file.exists === false ? 'must be absent' : 'must exist'}`);
+        if (file.sha256) expectations.push(`  SHA-256: ${file.sha256}`);
+        if (file.text !== undefined && file.text !== null) expectations.push(`  exact text: ${file.text}`);
+        if (Object.prototype.hasOwnProperty.call(file, 'json')) expectations.push(`  JSON value: ${JSON.stringify(file.json)}`);
+      }
       return {name: visible(c?.name || `Case ${i + 1}`), form: argv ? 'argv' : 'command', command: visible(command, true), missing: !command.trim(), expectations: expectations.map(e => visible(e, true))};
     });
     const valid = /^[a-f0-9]{64}$/i.test(sha256), approvedSha256 = preview?.approvedSha256 ?? null;

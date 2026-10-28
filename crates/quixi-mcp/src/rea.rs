@@ -2,6 +2,7 @@
 use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
 use quixi_platform::ProcessJob;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::{
@@ -20,15 +21,120 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
 const SESSION_TIMEOUT: Duration = Duration::from_secs(120);
 const DIAGNOSTIC_LINES: usize = 30;
 
-/// Per-call budget for REA tools; override with QUIXI_REA_CALL_TIMEOUT_SECS.
-pub fn call_timeout() -> Duration {
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct RuntimeSettings {
+    mode: String,
+    #[serde(rename = "ghidraHeapMiB")]
+    ghidra_heap_mib: u32,
+    ghidra_startup_timeout_secs: u64,
+    call_timeout_secs: u64,
+}
+
+impl Default for RuntimeSettings {
+    fn default() -> Self {
+        Self {
+            mode: "bundled".into(),
+            ghidra_heap_mib: 4096,
+            ghidra_startup_timeout_secs: 900,
+            call_timeout_secs: DEFAULT_CALL_TIMEOUT_SECS,
+        }
+    }
+}
+
+impl RuntimeSettings {
+    fn validate(&self) -> Result<()> {
+        if !matches!(self.mode.as_str(), "bundled" | "installed") {
+            bail!("Unknown REA runtime; choose bundled or installed");
+        }
+        if !(512..=65536).contains(&self.ghidra_heap_mib) {
+            bail!("Ghidra heap must be between 512 and 65536 MiB");
+        }
+        if !(60..=7200).contains(&self.ghidra_startup_timeout_secs) {
+            bail!("Ghidra startup timeout must be between 60 and 7200 seconds");
+        }
+        if !(30..=14400).contains(&self.call_timeout_secs) {
+            bail!("REA call timeout must be between 30 and 14400 seconds");
+        }
+        if self.call_timeout_secs < self.ghidra_startup_timeout_secs {
+            bail!("REA call timeout must be at least the Ghidra startup timeout");
+        }
+        Ok(())
+    }
+
+    fn patched(&self, patch: &Value) -> Result<Self> {
+        let patch = patch
+            .as_object()
+            .context("REA settings must be a JSON object")?;
+        let mut value = serde_json::to_value(self)?;
+        let object = value.as_object_mut().context("Invalid REA settings")?;
+        for (key, value) in patch {
+            object.insert(key.clone(), value.clone());
+        }
+        let settings: Self =
+            serde_json::from_value(value).context("Invalid REA runtime settings")?;
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    fn load(path: &Path) -> Result<Self> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default())
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let settings: Self =
+            serde_json::from_slice(&bytes).context("Could not parse REA settings")?;
+        settings.validate()?;
+        Ok(settings)
+    }
+
+    fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let parent = path
+            .parent()
+            .context("REA settings have no parent directory")?;
+        let name = path.file_name().context("REA settings have no file name")?;
+        std::fs::create_dir_all(parent)?;
+        quixi_platform::SafeFs::write_file_beneath(
+            parent,
+            Path::new(name),
+            &serde_json::to_vec_pretty(self)?,
+        )
+        .context("Could not save REA runtime settings")
+    }
+
+    fn apply_environment(&self, command: &mut Command) {
+        command
+            .env(
+                "REA_GHIDRA_STARTUP_TIMEOUT_MS",
+                (self.ghidra_startup_timeout_secs * 1000).to_string(),
+            )
+            .env(
+                "GHIDRA_HEADLESS_MAXMEM",
+                format!("{}M", self.ghidra_heap_mib),
+            );
+    }
+}
+
+fn timeout_override(value: Option<&str>) -> Option<u64> {
+    value
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|secs| (30..=14400).contains(secs))
+}
+
+fn configured_call_timeout(settings: &RuntimeSettings) -> Duration {
     Duration::from_secs(
-        std::env::var("QUIXI_REA_CALL_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .filter(|secs| *secs > 0)
-            .unwrap_or(DEFAULT_CALL_TIMEOUT_SECS),
+        timeout_override(std::env::var("QUIXI_REA_CALL_TIMEOUT_SECS").ok().as_deref())
+            .unwrap_or(settings.call_timeout_secs),
     )
+}
+
+/// Legacy default budget; a plugin's calls use its persisted settings instead.
+pub fn call_timeout() -> Duration {
+    configured_call_timeout(&RuntimeSettings::default())
 }
 
 /// Names must exist in REA 6.8.0's catalog (resources/plugins/rea/tool-catalog-6.8.0.txt).
@@ -106,14 +212,27 @@ pub(crate) struct Client {
     abandoned: VecDeque<u64>,
     /// The transport ended or failed. Only then is the session unusable.
     broken: bool,
+    server_info: Value,
 }
 impl Client {
-    pub(crate) fn pid(&self) -> u32 { self.child.id() }
-    pub(crate) fn running(&mut self) -> bool { matches!(self.child.try_wait(), Ok(None)) }
-    pub(crate) fn usable(&mut self) -> bool { !self.broken && self.running() }
-    fn job(&self) -> Option<Arc<ProcessJob>> { self.job.clone() }
-    fn diagnostics(&self) -> String { self.stderr.lock().iter().cloned().collect() }
-    fn start(root: &Path, mode: &str) -> Result<Self> {
+    pub(crate) fn pid(&self) -> u32 {
+        self.child.id()
+    }
+    pub(crate) fn running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+    pub(crate) fn usable(&mut self) -> bool {
+        !self.broken && self.running()
+    }
+    fn job(&self) -> Option<Arc<ProcessJob>> {
+        self.job.clone()
+    }
+    fn diagnostics(&self) -> String {
+        self.stderr.lock().iter().cloned().collect()
+    }
+    fn start(root: &Path, settings: &RuntimeSettings) -> Result<Self> {
+        settings.validate()?;
+        let mode = settings.mode.as_str();
         let node = root.join(if cfg!(windows) {
             "node/node.exe"
         } else {
@@ -159,11 +278,10 @@ impl Client {
             .env("REA_MCP_INPUT_SCHEMA_PROFILE", "compact")
             .env("REA_MCP_OUTPUT_SCHEMA_PROFILE", "off")
             .env("REA_MCP_MAX_RESPONSE_BYTES", "10485760")
-            .env("REA_GHIDRA_STARTUP_TIMEOUT_MS", "540000")
-            .env("GHIDRA_HEADLESS_MAXMEM", "1536M")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        settings.apply_environment(&mut command);
         if mode == "bundled" && root.join("ghidra/Ghidra/application.properties").is_file() {
             command.env("GHIDRA_INSTALL_DIR", root.join("ghidra"));
         }
@@ -211,7 +329,10 @@ impl Client {
         Self::spawn(command, true)
     }
     pub(crate) fn spawn(mut command: Command, terminate_tree: bool) -> Result<Self> {
-        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = command.spawn().context("Could not launch MCP provider")?;
         // A kill-on-close job ends node and its Ghidra JVM even if node crashes first.
         // Bridges that must leave their debugger running (terminate_tree=false) stay outside.
@@ -290,6 +411,7 @@ impl Client {
             terminate_tree,
             abandoned: VecDeque::new(),
             broken: false,
+            server_info: Value::Null,
         };
         let initialized = client.request(
             "initialize",
@@ -300,6 +422,10 @@ impl Client {
         if initialized.get("protocolVersion").is_none() {
             bail!("REA returned an invalid initialization response");
         }
+        client.server_info = initialized
+            .get("serverInfo")
+            .cloned()
+            .unwrap_or(Value::Null);
         client.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))?;
         Ok(client)
     }
@@ -316,7 +442,12 @@ impl Client {
         }
         written
     }
-    pub(crate) fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+    pub(crate) fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
         if self.broken {
             bail!("The MCP connection has ended. Reconnect before continuing.");
         }
@@ -370,7 +501,8 @@ impl Client {
             let response_id = message.get("id").and_then(Value::as_u64);
             if response_id != Some(id) {
                 // A late reply to a cancelled request is not this request's answer.
-                if let Some(position) = self.abandoned.iter().position(|a| Some(*a) == response_id) {
+                if let Some(position) = self.abandoned.iter().position(|a| Some(*a) == response_id)
+                {
                     self.abandoned.remove(position);
                 }
                 continue;
@@ -452,10 +584,15 @@ fn preference_path() -> PathBuf {
 }
 pub struct ReaPlugin {
     root: PathBuf,
+    preferences: PathBuf,
     client: Mutex<Option<Client>>,
     catalog: Mutex<Vec<Value>>,
     pid: AtomicU32,
-    mode: Mutex<String>,
+    settings: Mutex<RuntimeSettings>,
+    settings_error: Mutex<Option<String>>,
+    /// Serializes startup with configuration changes, without blocking disconnect.
+    configuration: Mutex<()>,
+    server_info: Mutex<Value>,
     /// The live process tree, reachable while a call holds `client`, so
     /// disconnect and shutdown can end it immediately.
     process: Mutex<Option<(u32, Option<Arc<ProcessJob>>)>>,
@@ -463,6 +600,82 @@ pub struct ReaPlugin {
     generation: AtomicU64,
 }
 impl ReaPlugin {
+    fn runtime_metadata(&self, settings: &RuntimeSettings, connected: bool) -> Value {
+        let manifest = std::fs::read(self.root.join("plugin.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .unwrap_or(Value::Null);
+        let bundled_rea = std::fs::read(self.root.join("node_modules/rea-agents/package.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .and_then(|package| package["version"].as_str().map(str::to_owned));
+        let server_info = if connected {
+            self.server_info.lock().clone()
+        } else {
+            Value::Null
+        };
+        let mut warnings = Vec::new();
+        if settings.mode == "installed" {
+            warnings.push("External REA runtime selected. Bundled component versions do not describe the external launcher; use the connected server identity and returned analysis provenance.");
+        }
+        if let (Some(actual), Some(bundled)) =
+            (server_info["version"].as_str(), bundled_rea.as_deref())
+        {
+            if actual != bundled {
+                warnings.push("The connected REA version differs from the bundled version. Live tool schemas take precedence over bundled guides.");
+            }
+        }
+        let override_value = std::env::var("QUIXI_REA_CALL_TIMEOUT_SECS").ok();
+        let override_secs = timeout_override(override_value.as_deref());
+        if override_value.is_some() && override_secs.is_none() {
+            warnings.push(
+                "QUIXI_REA_CALL_TIMEOUT_SECS is invalid; the saved call timeout is being used.",
+            );
+        }
+        if configured_call_timeout(settings).as_secs() < settings.ghidra_startup_timeout_secs {
+            warnings.push("The environment call timeout is shorter than the Ghidra startup timeout and can cancel a cold import early.");
+        }
+        json!({"mode":settings.mode,"serverInfo":server_info,
+            "bundled":{"rea":bundled_rea,"declaredComponents":manifest["runtime"]},
+            "catalogTools":if connected {self.catalog.lock().len()} else {0},
+            "catalogStatus":if connected {"live"} else {"not_connected"},
+            "effectiveCallTimeoutSecs":configured_call_timeout(settings).as_secs(),
+            "callTimeoutSource":if override_secs.is_some(){"environment"}else{"settings"},
+            "warnings":warnings})
+    }
+
+    /// Reading settings never starts an analysis process.
+    pub fn runtime_settings(&self) -> Value {
+        let connected = self.is_connected();
+        let settings = self.settings.lock().clone();
+        json!({"settings":settings,"settingsError":*self.settings_error.lock(),
+            "connected":connected,"runtime":self.runtime_metadata(&settings,connected),
+            "limits":{"ghidraHeapMiB":{"min":512,"max":65536},
+                "ghidraStartupTimeoutSecs":{"min":60,"max":7200},
+                "callTimeoutSecs":{"min":30,"max":14400}}})
+    }
+
+    /// Validate and atomically persist a partial settings update. A changed
+    /// configuration ends the old session, so no call runs with mixed settings.
+    pub fn configure(&self, patch: &Value) -> Result<Value> {
+        let _configuration = self.configuration.try_lock()
+            .context("REA is connecting or changing settings. Disconnect it, then retry the settings change.")?;
+        let previous = self.settings.lock().clone();
+        let next = previous.patched(patch)?;
+        let changed = previous != next || self.settings_error.lock().is_some();
+        if changed {
+            // A failed disk write leaves the current runtime and settings intact.
+            next.save(&self.preferences)?;
+            self.disconnect()?;
+            *self.settings.lock() = next;
+            *self.settings_error.lock() = None;
+        }
+        let mut response = self.runtime_settings();
+        response["changed"] = json!(changed);
+        response["reconnectRequired"] = json!(changed);
+        Ok(response)
+    }
+
     pub fn workflow(&self, request: &Value) -> Result<Value> {
         let name = request["path"].as_str().unwrap_or("SKILL.md");
         let guides = [
@@ -497,11 +710,19 @@ impl ReaPlugin {
     }
     pub fn status(&self) -> Value {
         let connected = self.is_connected();
+        let settings = self.settings.lock().clone();
+        let tools = if connected {
+            self.catalog.lock().clone()
+        } else {
+            vec![]
+        };
+        let runtime = self.runtime_metadata(&settings, connected);
         json!({"name":"rea", "uuid":"quixi-bundled-rea", "isInternal":false,
-            "serverSource":"bundled_plugin", "builtin":true, "transport":"stdio",
+            "serverSource":if settings.mode == "bundled" {"bundled_plugin"} else {"installed_launcher"}, "builtin":true, "transport":"stdio",
             "isConnected":connected,"status":if connected {"connected"} else {"disconnected"},
-            "toolsEnumerated":connected, "tools":if connected { self.catalog.lock().clone() } else {vec![]},
-            "resources":[],"prompts":[]})
+            "toolsEnumerated":connected, "tools":tools,
+            "settings":settings,"settingsError":*self.settings_error.lock(),
+            "runtime":runtime,"resources":[],"prompts":[]})
     }
     pub fn is_connected(&self) -> bool {
         // A busy request owns the client lock; never block UI status on analysis.
@@ -517,6 +738,7 @@ impl ReaPlugin {
         *guard = None;
         self.pid.store(0, Ordering::Release);
         self.catalog.lock().clear();
+        *self.server_info.lock() = Value::Null;
         *self.process.lock() = None;
     }
     /// End the REA process tree without waiting for the client lock.
@@ -536,20 +758,28 @@ impl ReaPlugin {
             _ => {}
         }
     }
-    pub fn process_id(&self) -> u32 { self.pid.load(Ordering::Acquire) }
+    pub fn process_id(&self) -> u32 {
+        self.pid.load(Ordering::Acquire)
+    }
     pub fn new(resources: &Path) -> Self {
-        let mode = std::fs::read(preference_path())
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            .and_then(|v| {
-                v["mode"]
-                    .as_str()
-                    .filter(|s| matches!(*s, "bundled" | "installed"))
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| "bundled".into());
+        Self::with_preferences(resources, preference_path())
+    }
+    fn with_preferences(resources: &Path, preferences: PathBuf) -> Self {
+        let (settings, error) = match RuntimeSettings::load(&preferences) {
+            Ok(settings) => (settings, None),
+            Err(error) => (
+                RuntimeSettings::default(),
+                Some(format!(
+                    "{error:#}. Review and save the runtime settings before connecting."
+                )),
+            ),
+        };
         Self {
-            mode: Mutex::new(mode),
+            preferences,
+            settings: Mutex::new(settings),
+            settings_error: Mutex::new(error),
+            configuration: Mutex::new(()),
+            server_info: Mutex::new(Value::Null),
             root: resources.join("plugins/rea"),
             client: Mutex::new(None),
             catalog: Mutex::new(vec![]),
@@ -559,20 +789,18 @@ impl ReaPlugin {
         }
     }
     pub fn connect(&self, requested_mode: Option<&str>) -> Result<Value> {
-        if let Some(mode) = requested_mode {
-            if !matches!(mode, "bundled" | "installed") {
-                bail!("Unknown REA runtime");
-            }
-            if *self.mode.lock() != mode {
-                self.disconnect()?;
-                *self.mode.lock() = mode.into();
-                std::fs::write(
-                    preference_path(),
-                    serde_json::to_vec_pretty(&json!({"mode":mode}))?,
-                )?;
-            }
+        if let Some(error) = self.settings_error.lock().as_ref() {
+            bail!("{error}");
         }
-        let mode = self.mode.lock().clone();
+        if let Some(mode) = requested_mode {
+            self.configure(&json!({"mode":mode}))?;
+        }
+        let _configuration = self.configuration.lock();
+        if let Some(error) = self.settings_error.lock().as_ref() {
+            bail!("{error}");
+        }
+        let settings = self.settings.lock().clone();
+        let mode = settings.mode.as_str();
         let generation = self.generation.load(Ordering::Acquire);
         let mut guard = self.client.lock();
         for attempt in 0..2 {
@@ -582,7 +810,7 @@ impl ReaPlugin {
             }
             let fresh = guard.is_none();
             if fresh {
-                let mut client = Client::start(&self.root, &mode)?;
+                let mut client = Client::start(&self.root, &settings)?;
                 *self.process.lock() = Some((client.pid(), client.job()));
                 // A disconnect during start found no process to end, and one during the
                 // catalog request ends it; either way the new client must not be kept.
@@ -595,6 +823,7 @@ impl ReaPlugin {
                 match tools {
                     Ok(tools) if !disconnected() => {
                         *self.catalog.lock() = tools;
+                        *self.server_info.lock() = client.server_info.clone();
                         self.pid.store(client.pid(), Ordering::Release);
                         *guard = Some(client);
                     }
@@ -632,9 +861,11 @@ impl ReaPlugin {
                     bail!("REA session inspection failed: {}", payload(&session))
                 }
                 Ok(session) => {
-                    return Ok(
-                        json!({"connected":true,"mode":mode,"installedWrapper":installed_wrapper(),"session":payload(&session),"tools":*self.catalog.lock()}),
-                    )
+                    let runtime = self.runtime_metadata(&settings, true);
+                    let tools = self.catalog.lock().clone();
+                    return Ok(json!({"connected":true,"mode":mode,"settings":settings,
+                            "runtime":runtime,"installedWrapper":installed_wrapper(),
+                            "session":payload(&session),"tools":tools}));
                 }
                 Err(error) => {
                     if !client.usable() {
@@ -688,6 +919,7 @@ impl ReaPlugin {
         self.kill_out_of_band();
         self.pid.store(0, Ordering::Release);
         self.catalog.lock().clear();
+        *self.server_info.lock() = Value::Null;
         if let Some(mut guard) = self.client.try_lock_for(Duration::from_secs(10)) {
             self.forget_client(&mut guard);
         }
@@ -697,6 +929,8 @@ impl ReaPlugin {
         self.generation.fetch_add(1, Ordering::AcqRel);
         self.kill_out_of_band();
         self.pid.store(0, Ordering::Release);
+        self.catalog.lock().clear();
+        *self.server_info.lock() = Value::Null;
         if let Some(mut guard) = self.client.try_lock() {
             *guard = None;
         }
@@ -709,10 +943,17 @@ impl ReaPlugin {
             bail!("Tool is not advertised by the connected REA server: {name}");
         }
         let mut guard = self.client.lock();
-        self.call_locked(&mut guard, name, args, call_timeout())
+        let timeout = configured_call_timeout(&self.settings.lock());
+        self.call_locked(&mut guard, name, args, timeout)
     }
     /// Only a transport failure ends the session; a timeout or tool error keeps it.
-    fn call_locked(&self, guard: &mut Option<Client>, name: &str, args: Value, timeout: Duration) -> Result<Value> {
+    fn call_locked(
+        &self,
+        guard: &mut Option<Client>,
+        name: &str,
+        args: Value,
+        timeout: Duration,
+    ) -> Result<Value> {
         let client = guard
             .as_mut()
             .context("Connect the bundled REA plugin first")?;
@@ -750,7 +991,10 @@ impl ReaPlugin {
     pub fn close_target(&self) -> Result<()> {
         let response = self.call_when_idle("close_binary", json!({}), CLOSE_TIMEOUT)?;
         if response["isError"] == true {
-            bail!("REA could not close its open binary: {}", payload(&response));
+            bail!(
+                "REA could not close its open binary: {}",
+                payload(&response)
+            );
         }
         Ok(())
     }
@@ -764,28 +1008,178 @@ impl ReaPlugin {
 mod tests {
     use super::*;
 
+    fn settings_directory() -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("rea-settings-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn runtime_settings_migrate_mode_only_and_round_trip() {
+        let root = settings_directory();
+        let path = root.join("rea-plugin.json");
+        assert_eq!(
+            RuntimeSettings::load(&path).unwrap(),
+            RuntimeSettings::default()
+        );
+        std::fs::write(&path, br#"{"mode":"installed"}"#).unwrap();
+        let previous = RuntimeSettings::load(&path).unwrap();
+        assert_eq!(previous.mode, "installed");
+        assert_eq!(previous.ghidra_heap_mib, 4096);
+        let updated = previous.patched(&json!({"ghidraHeapMiB":8192,"ghidraStartupTimeoutSecs":1200,"callTimeoutSecs":2400})).unwrap();
+        updated.save(&path).unwrap();
+        assert_eq!(RuntimeSettings::load(&path).unwrap(), updated);
+        assert_eq!(updated.mode, "installed");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn invalid_runtime_settings_do_not_change_saved_or_running_configuration() {
+        let root = settings_directory();
+        let path = root.join("rea-plugin.json");
+        RuntimeSettings::default().save(&path).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let plugin = ReaPlugin::with_preferences(&root, path.clone());
+        for patch in [
+            json!({"ghidraHeapMiB":511}),
+            json!({"ghidraHeapMiB":65537}),
+            json!({"ghidraHeapMiB":4096.5}),
+            json!({"ghidraHeapMiB":null}),
+            json!({"ghidraStartupTimeoutSecs":7201}),
+            json!({"callTimeoutSecs":29}),
+            json!({"callTimeoutSecs":14401}),
+            json!({"callTimeoutSecs":600}),
+            json!({"mode":"remote"}),
+            json!({"unknown":true}),
+            json!([]),
+        ] {
+            assert!(plugin.configure(&patch).is_err(), "accepted {patch}");
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert_eq!(*plugin.settings.lock(), RuntimeSettings::default());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_preferences_are_preserved_until_explicit_settings_save() {
+        let root = settings_directory();
+        let path = root.join("rea-plugin.json");
+        std::fs::write(&path, b"{broken").unwrap();
+        let plugin = ReaPlugin::with_preferences(&root, path.clone());
+        assert!(plugin.runtime_settings()["settingsError"].is_string());
+        assert!(plugin.connect(None).is_err());
+        assert!(plugin.connect(Some("bundled")).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"{broken");
+        let saved = plugin
+            .configure(&json!({"mode":"bundled","ghidraHeapMiB":2048}))
+            .unwrap();
+        assert_eq!(saved["changed"], true);
+        assert!(saved["settingsError"].is_null());
+        assert_eq!(RuntimeSettings::load(&path).unwrap().ghidra_heap_mib, 2048);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_settings_reach_child_environment_and_timeout_override_is_bounded() {
+        let settings = RuntimeSettings::default()
+            .patched(&json!({"ghidraHeapMiB":8192,"ghidraStartupTimeoutSecs":1200}))
+            .unwrap();
+        let mut command = Command::new("unused-test-command");
+        settings.apply_environment(&mut command);
+        let environment: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.unwrap().to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(environment["GHIDRA_HEADLESS_MAXMEM"], "8192M");
+        assert_eq!(environment["REA_GHIDRA_STARTUP_TIMEOUT_MS"], "1200000");
+        assert_eq!(timeout_override(Some(" 3600 ")), Some(3600));
+        for invalid in [None, Some("0"), Some("-1"), Some("invalid"), Some("14401")] {
+            assert_eq!(timeout_override(invalid), None);
+        }
+    }
+
+    #[test]
+    fn settings_changes_are_serialized_and_failed_saves_leave_state_unchanged() {
+        let root = settings_directory();
+        let path = root.join("rea-plugin.json");
+        let plugin = ReaPlugin::with_preferences(&root, path);
+        let guard = plugin.configuration.lock();
+        assert!(plugin.configure(&json!({"ghidraHeapMiB":8192})).is_err());
+        drop(guard);
+        let blocking_file = root.join("not-a-directory");
+        std::fs::write(&blocking_file, b"keep").unwrap();
+        let plugin = ReaPlugin::with_preferences(&root, blocking_file.join("rea-plugin.json"));
+        assert!(plugin.configure(&json!({"ghidraHeapMiB":8192})).is_err());
+        assert_eq!(plugin.settings.lock().ghidra_heap_mib, 4096);
+        assert_eq!(std::fs::read(blocking_file).unwrap(), b"keep");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_identity_distinguishes_bundle_metadata_from_live_server() {
+        let root = settings_directory();
+        let plugin = ReaPlugin::with_preferences(&root, root.join("rea-plugin.json"));
+        std::fs::create_dir_all(plugin.root.join("node_modules/rea-agents")).unwrap();
+        std::fs::write(
+            plugin.root.join("node_modules/rea-agents/package.json"),
+            br#"{"version":"6.8.0"}"#,
+        )
+        .unwrap();
+        *plugin.server_info.lock() = json!({"name":"rea","version":"6.3.0"});
+        let settings = RuntimeSettings::default()
+            .patched(&json!({"mode":"installed"}))
+            .unwrap();
+        let metadata = plugin.runtime_metadata(&settings, true);
+        assert_eq!(metadata["serverInfo"]["version"], "6.3.0");
+        assert_eq!(metadata["bundled"]["rea"], "6.8.0");
+        assert!(metadata["warnings"].as_array().unwrap().len() >= 2);
+        assert!(plugin.runtime_metadata(&settings, false)["serverInfo"].is_null());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn agent_tools_exist_in_the_bundled_rea_catalog() {
         let catalog = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../resources/plugins/rea/tool-catalog-6.8.0.txt"
         ));
-        let names: std::collections::HashSet<&str> =
-            catalog.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        let names: std::collections::HashSet<&str> = catalog
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
         assert!(names.len() > 200, "catalog looks truncated");
         let missing: Vec<_> = AGENT_TOOLS.iter().filter(|t| !names.contains(*t)).collect();
-        assert!(missing.is_empty(), "not advertised by REA 6.8.0: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "not advertised by REA 6.8.0: {missing:?}"
+        );
         let mut unique = AGENT_TOOLS.to_vec();
         unique.sort_unstable();
         unique.dedup();
-        assert_eq!(unique.len(), AGENT_TOOLS.len(), "duplicate agent tool names");
+        assert_eq!(
+            unique.len(),
+            AGENT_TOOLS.len(),
+            "duplicate agent tool names"
+        );
     }
 
     /// A scripted stdio server: never answers `slow`, exits on `exit`, echoes
     /// cancellations as non-JSON stdout, and answers everything else.
     #[cfg(windows)]
     fn scripted_server() -> (Client, PathBuf) {
-        let script = std::env::temp_dir().join(format!("quixi-mcp-fake-{}.ps1", std::process::id()));
+        let script =
+            std::env::temp_dir().join(format!("quixi-mcp-fake-{}.ps1", std::process::id()));
         std::fs::write(&script, r#"
 while ($null -ne ($line = [Console]::In.ReadLine())) {
   $m = $line | ConvertFrom-Json
@@ -800,7 +1194,15 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
 }
 "#).unwrap();
         let mut command = quixi_platform::background_command("powershell.exe");
-        command.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"]).arg(&script);
+        command
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(&script);
         (Client::spawn(command, true).unwrap(), script)
     }
 
@@ -808,13 +1210,26 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
     #[test]
     fn timeout_cancels_the_request_and_keeps_the_session() {
         let (mut client, script) = scripted_server();
-        let error = client.tool("slow", json!({}), Duration::from_secs(2)).unwrap_err();
+        let error = client
+            .tool("slow", json!({}), Duration::from_secs(2))
+            .unwrap_err();
         assert!(error.to_string().contains("session was kept"), "{error}");
         assert!(client.usable());
         // The server's non-JSON stdout line is skipped, not fatal.
-        assert_eq!(client.tool("fast", json!({}), Duration::from_secs(30)).unwrap()["ok"], true);
-        assert!(client.diagnostics().contains("cancelled 2"), "{}", client.diagnostics());
-        assert!(client.tool("exit", json!({}), Duration::from_secs(30)).is_err());
+        assert_eq!(
+            client
+                .tool("fast", json!({}), Duration::from_secs(30))
+                .unwrap()["ok"],
+            true
+        );
+        assert!(
+            client.diagnostics().contains("cancelled 2"),
+            "{}",
+            client.diagnostics()
+        );
+        assert!(client
+            .tool("exit", json!({}), Duration::from_secs(30))
+            .is_err());
         assert!(!client.usable());
         drop(client);
         let _ = std::fs::remove_file(script);

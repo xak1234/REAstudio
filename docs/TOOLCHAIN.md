@@ -40,6 +40,24 @@ Downloads use the exact official release URLs and SHA-256 digests recorded in `r
 
 The installer does not execute installers, add global PATH entries, register shell extensions, alter Java, install proxy certificates, or attach to processes. After installation, refresh detection and verify the tool. Windows SDKs, Python/.NET environments, device/emulator setup and project compilers remain separate prerequisites where required.
 
+## REA runtime identity and resource settings
+
+Use **REA runtime settings** to select the bundled or existing external REA runtime and set analysis resources. Fresh profiles use the bundled runtime. An existing explicit external-runtime selection is preserved; installing a newer application does not silently switch its engine. The connection reports the actual MCP server identity and live catalog count separately from the bundled component manifest. External Ghidra/Java versions must be checked in returned analysis provenance or the external launcher's configuration; the bundle manifest does not describe them.
+
+Settings are persisted in the application's `rea-plugin.json`:
+
+| Setting | Default | Accepted range |
+| --- | --- | --- |
+| `ghidraHeapMiB` | 4096 MiB | 512–65536 MiB |
+| `ghidraStartupTimeoutSecs` | 900 seconds | 60–7200 seconds |
+| `callTimeoutSecs` | 1800 seconds | 30–14400 seconds, at least the startup timeout |
+
+Choose a heap that fits available RAM alongside the application, model server and target workload. Increasing it is a resource allowance, not a guarantee that any particular binary will complete. Ghidra startup uses the saved timeout; an analysis call may need additional time after import. The advanced `QUIXI_REA_CALL_TIMEOUT_SECS` environment override remains available for values from 30 to 14400 seconds. The status reports when it overrides the saved value, rejects invalid values in favour of the saved setting, and warns when it is shorter than startup.
+
+Saving changed settings disconnects the current REA session and stops its owned process tree. Reconnect and reopen the artifact before continuing; ephemeral Ghidra annotations and live retained references belong to the old session. Saved evidence remains available. Settings cannot change while a new connection is starting: disconnect and retry. A failed settings write leaves the current configuration unchanged. Existing mode-only preferences receive the resource defaults. Malformed settings are kept on disk and reported; review and save settings explicitly before connecting.
+
+The local application route `rea/settings` reads settings with `{}` and accepts a partial object containing `mode`, `ghidraHeapMiB`, `ghidraStartupTimeoutSecs` or `callTimeoutSecs`. Unknown fields and invalid values are rejected. This route is for the trusted desktop interface; it does not expand the external MCP control catalog.
+
 ## IDA Pro
 
 IDA is used in three independent ways. All need your own licensed IDA Pro; REA Studio does not install IDA, accept its license terms, claim IDA Free is equivalent, or read license details. Select the original input binary, never an IDB/I64, as the artifact.

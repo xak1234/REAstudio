@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.3.0 — 2026-10-28
+
+### Investigation integrity
+- Capture file artifact SHA-256 before and after analysis; retain changed-target failures and group history by artifact version.
+- Filter reconstruction dossiers and analysis briefs by verified file identity, explicitly recording legacy/different-version exclusions without deleting evidence.
+- Preserve runtime cancellation when analysis is serialized.
+
+### Runtime and agent reliability
+- Add persistent Ghidra memory, startup and call timeouts with validation, atomic writes and live server/version diagnostics.
+- Qualify model selection by provider, reconcile stale defaults, budget context conservatively and save investigation checkpoints without automatically replaying commands.
+
+### Behavioural verification
+- Add bounded file existence, SHA-256, exact text and structural JSON assertions, per-case timeouts and up to 256 cases within a two-hour planned budget.
+- Propagate oracle cancellation to child processes and add Stop checks for direct UI suites.
+- Show the actual nested oracle expectations before approval.
+
+### Validation
+- Include IDA, debugger, decompile and MCP unit coverage in CI with explicit passed/failed/ignored receipts.
+- Correct the UI oracle approval smoke sequence and add an optimized source-known C++ EXE/DLL benchmark with optional runtime baseline.
+- Mark licensed live tests explicitly ignored unless requested, then require their configured backend.
+
+
+
 The initial Windows edition includes a reconstruction workflow for selected features or staged application rebuilds, saved task handoff, evidence dossier export, and actionable guidance for PE resource ranges that are not file-backed.
 
 ## 1.2.0 — 2026-10-28

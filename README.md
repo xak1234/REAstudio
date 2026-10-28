@@ -1,7 +1,7 @@
 <div align="center">
 <img src="resources/rea-logo.svg" alt="REA Studio" width="220">
 
-# REA Studio V1.2.0
+# REA Studio V1.3.0
 
 **A native coding playground with an integrated REA reverse engineering workspace.**
 
@@ -10,7 +10,7 @@
 
 REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. Its dark playground layout keeps the project on the left, work in the centre, and model/tool settings on the right.
 
-**V1.2.0 (package version 1.2.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
+**V1.3.0 (package version 1.3.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
 
 This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/QuixiAI/QuixiDesk), with a separately implemented playground UI and the upstream MIT attribution preserved. It is an independent community project. It does not include the upstream Classic renderer, extracted application assets, proprietary fonts, example account data, or local machine configuration. See [NOTICE.md](NOTICE.md) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled components.
 
@@ -37,6 +37,17 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 
 This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY (commands cannot read keyboard input), a full debugger UI, Git branch/push/pull operations, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
 
+### Investigation controls in V1.3
+
+Analysis resources and runtime identity shows the connected server separately from the bundled component versions. Set Ghidra heap, startup and call limits there, then Save & reconnect. Use Bundled REA for the release-pinned stack; an existing external wrapper may run another version.
+
+File evidence is pinned to the artifact's SHA-256. Artifact versions groups saved results by path and content hash. Dossier export excludes different builds and legacy records without verified identity, records why, and preserves the originals. Directory evidence stays explicitly unverified. Completed analysis briefs must match the current binary before automatic build handoff.
+
+Connections includes Server context capacity: use your server's actual configured token limit. The agent reserves output space, budgets input conservatively, and retains bounded checkpoint notes across interruptions; continuing starts a new task and never automatically repeats pending commands.
+
+Oracle cases can compare files by existence, exact text, SHA-256 or structural JSON as well as process outputs. Review the displayed assertions, approve the exact suite, and use Stop checks to cancel its owned processes. These are declared behavioural checks; application-wide coverage still requires a reviewed test plan.
+
+
 ## Requirements
 
 - Windows x64; validated on Windows 11. Windows 10 x64 is a compatibility target, not a separately completed test run.
@@ -50,11 +61,11 @@ No global Node, Java, Ghidra, npm, Rust, or administrator installation is needed
 
 ## Install and run
 
-1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.2.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
+1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.3.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
 2. Verify the ZIP in PowerShell:
 
    ```powershell
-   $archive = '.\REA-Studio-1.2.0-x64.zip'
+   $archive = '.\REA-Studio-1.3.0-x64.zip'
    $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
    $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
    if ($actual -ne $expected) { throw 'Checksum mismatch: download the release again.' }
@@ -139,7 +150,7 @@ Opening a project runs Git only when the repository's own config defines no comm
 | Ghidra | 12.1.4 | Native import, function analysis, and decompilation |
 | Eclipse Temurin JDK | 21.0.12.1+1 | Runs Ghidra and its Java tooling |
 
-The plugin receives its own `JAVA_HOME`, `GHIDRA_INSTALL_DIR`, and `PATH`. It does not alter system Java, install global npm packages, or register itself in other MCP clients. Ghidra's headless heap limit is 1536 MiB; total application and analysis memory can be higher.
+The plugin receives its own `JAVA_HOME`, `GHIDRA_INSTALL_DIR`, and `PATH`. It does not alter system Java, install global npm packages, or register itself in other MCP clients. Ghidra's default headless heap is 4096 MiB and is configurable in Analysis resources; total application and analysis memory can be higher.
 
 ### Typical workflow
 
@@ -230,7 +241,7 @@ To produce a complete distributable:
 
 The script builds the locked workspace, obtains pinned/checksummed runtimes, installs REA with the npm lockfile, copies only the public application resources, collects dependency notices and corresponding source, generates a file hash manifest, and creates the versioned ZIP and SHA-256 sidecar in `dist`.
 
-`-SkipBuild -SkipDependencyDownload` packages an already prepared checkout. `-NoZip` leaves only the staged folder. `-BuildOutput` can point at a separate Cargo release output folder. Existing output directories are not overwritten. The prepare script restores its process PATH and does not change system environment variables.
+`-SkipBuild -SkipDependencyDownload` packages an already prepared checkout. `-NoZip` leaves only the staged folder. `-BuildOutput` can point at a separate Cargo release output folder. `-OutputRoot` can place the staged release and ZIP on another drive (the default is `dist`). Existing output directories are not overwritten. The prepare script restores its process PATH and does not change system environment variables.
 
 ### Validate changes
 

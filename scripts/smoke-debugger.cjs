@@ -29,9 +29,12 @@ const {chromium} = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwrig
     const absent=await native('debugger/call',{tool:'get_debugger_status',arguments:{}});assert.equal(absent.failed,true);
     console.log('Debugger check: live catalog connected; no session correctly reported');
     await page.locator('#debugger-start').click();
-    await page.waitForFunction(()=>{try{const r=JSON.parse(document.getElementById('rea-output').textContent);return r.tool==='start_session';}catch{return false;}},{},{timeout:110000});
-    const started=JSON.parse(await page.locator('#rea-output').textContent());assert.equal(started.failed,false,text(started));
+    await page.waitForFunction(()=>!state.rea.operation && state.rea.record?.tool==='start_session',null,{timeout:110000});
+    const started=await page.evaluate(()=>state.rea.record);assert.equal(started.failed,false,text(started));
     debuggerPid=Number(text(started).match(/Debugger PID: (\d+)/)?.[1]);assert(debuggerPid);
+    await page.locator('#evidence-raw').evaluate(node=>{node.open=true;});
+    await page.waitForFunction(()=>{try{return JSON.parse(document.getElementById('rea-output').textContent).tool==='start_session';}catch{return false;}});
+    assert.deepEqual(JSON.parse(await page.locator('#rea-output').textContent()),started);
     assert.match(started.target,/quixi-fixture\.exe$/i);console.log('Debugger check: started fixture, debugger PID '+debuggerPid);
     const status=await native('debugger/call',{tool:'get_debugger_status',arguments:{}});assert.equal(status.failed,false);assert.match(text(status),/State: paused/);
     const registers=await native('debugger/call',{tool:'get_all_registers',arguments:{}});assert.equal(registers.failed,false,text(registers));assert.match(text(registers),/rip/i);

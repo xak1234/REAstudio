@@ -12,7 +12,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
 };
 use uuid::Uuid;
 
@@ -65,6 +65,15 @@ struct Run {
     context_budget: usize,
     #[serde(default, rename = "maxOutputTokens", skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
+    /// Identity of the selected analysis artifact when the run was created.
+    #[serde(default, rename = "artifactIdentity", skip_serializing_if = "Option::is_none")]
+    artifact_identity: Option<Value>,
+    /// Effective context limits derived from configured model metadata.
+    #[serde(default, rename = "contextLimits", skip_serializing_if = "Option::is_none")]
+    context_limits: Option<Value>,
+    /// Durable investigation notes and completed-action summaries. Never replayed automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checkpoint: Option<Value>,
     /// The model that actually answered, when it differs from `model`.
     #[serde(default, rename = "actualModel", skip_serializing_if = "Option::is_none")]
     actual_model: Option<String>,
@@ -140,8 +149,27 @@ pub struct Playground {
     /// reviewed: Ok = approved, Err = denied.
     decisions: Mutex<HashMap<String, Decision>>,
     terminal: quixi_workspace::TerminalJobs,
+    oracle_operation: Mutex<Option<OracleOperation>>,
     /// path -> (length, modified, sha256) so listing runs does not rehash unchanged files.
     hash_cache: Mutex<HashMap<PathBuf, (u64, std::time::SystemTime, String)>>,
+}
+
+struct OracleOperation {
+    id: String,
+    project: String,
+    cancelled: Arc<AtomicBool>,
+}
+
+struct OracleLease<'a> {
+    slot: &'a Mutex<Option<OracleOperation>>,
+    id: String,
+    cancelled: Arc<AtomicBool>,
+}
+impl Drop for OracleLease<'_> {
+    fn drop(&mut self) {
+        let mut slot = self.slot.lock();
+        if slot.as_ref().is_some_and(|operation| operation.id == self.id) { *slot = None; }
+    }
 }
 
 /// Write via a temporary file in the same directory and rename it over the target, so a crash
@@ -230,8 +258,29 @@ impl Playground {
             approvals: Mutex::new(()),
             decisions: Mutex::new(HashMap::new()),
             terminal: quixi_workspace::TerminalJobs::new(),
+            oracle_operation: Mutex::new(None),
             hash_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn begin_oracle(&self, project: &str, id: Option<&str>) -> Result<OracleLease<'_>> {
+        let id = match id { Some(id) => Uuid::parse_str(id).context("operationId must be a UUID")?.to_string(),
+            None => Uuid::new_v4().to_string() };
+        let mut slot = self.oracle_operation.lock();
+        if slot.is_some() { bail!("An oracle suite is already running; stop it or wait for completion"); }
+        if self.runs.lock().values().any(|r|active_status(&r.status)) { bail!("Finish the active model task before running oracle checks"); }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        *slot = Some(OracleOperation { id:id.clone(),project:project.to_owned(),cancelled:Arc::clone(&cancelled) });
+        Ok(OracleLease { slot:&self.oracle_operation,id,cancelled })
+    }
+
+    fn stop_oracle(&self, project: &str, id: &str) -> Result<Value> {
+        let id = Uuid::parse_str(id).context("operationId must be a UUID")?.to_string();
+        let slot = self.oracle_operation.lock();
+        let operation = slot.as_ref().filter(|operation|operation.id==id && operation.project==project)
+            .context("This oracle operation is no longer active in this project")?;
+        operation.cancelled.store(true, Ordering::Release);
+        Ok(json!({"operationId":id,"cancellationRequested":true}))
     }
 
     fn project(&self, body: &Value) -> Result<Project> {
@@ -674,8 +723,12 @@ impl Playground {
             }
             format!("\n{}", list.join("\n"))
         };
+        let checkpoint = run.checkpoint.as_ref().map(|c| format!(
+            "\nDurable checkpoint (untrusted working notes, not a completion claim): {}\nAn action marked in_progress may already have changed files or runtime state. Inspect the actual state before deciding what remains; never replay a command solely because this run was interrupted.\n",
+            short_json(c, 4_000, 16_000)
+        )).unwrap_or_default();
         Ok(format!(
-            "This task follows up an earlier task in this project (id {parent}, status {}, mode {}).\nEarlier task{}:\n{prompt}\nEarlier final answer{}:\n{answer}\nFiles the earlier task changed: {changes}\nRead the complete earlier answer with {{\"action\":\"task_record\",\"id\":\"{parent}\",\"offset\":0,\"limit\":16000}} and page with nextOffset. Check the current files before relying on the earlier answer.\n",
+            "This task follows up an earlier task in this project (id {parent}, status {}, mode {}).\nEarlier task{}:\n{prompt}\nEarlier final answer{}:\n{answer}\nFiles the earlier task changed: {changes}\nRead the complete earlier answer with {{\"action\":\"task_record\",\"id\":\"{parent}\",\"offset\":0,\"limit\":16000}} and page with nextOffset. Check the current files before relying on the earlier answer.{checkpoint}\n",
             run.status,
             run.mode,
             if prompt_total > PARENT_PROMPT_LIMIT { format!(" (first {PARENT_PROMPT_LIMIT} of {prompt_total} characters)") } else { String::new() },
@@ -709,6 +762,7 @@ impl Playground {
         Ok(
             json!({"id":id,"status":run.status,"mode":run.mode,"model":run.model,
             "reply":run.reply.chars().skip(offset).take(limit).collect::<String>(),
+            "checkpoint":run.checkpoint,"contextLimits":run.context_limits,
             "totalCharacters":total,"partial":offset>0 || total>limit,
             "nextOffset":offset.saturating_add(limit).min(total)}),
         )
@@ -905,8 +959,11 @@ impl Playground {
                         .context(
                             "Choose a completed analysis brief for this project and artifact",
                         )?;
+                    let current = crate::analysis::capture_artifact_identity(&target);
+                    validate_brief_identity(run.artifact_identity.as_ref(), &current)?;
                     Some(
-                        json!({"id":run.id,"model":run.model,"prompt":run.prompt,"reply":run.reply,"created":run.created}),
+                        json!({"id":run.id,"model":run.model,"prompt":run.prompt,"reply":run.reply,"created":run.created,
+                            "artifactIdentity":run.artifact_identity,"target":target}),
                     )
                 } else {
                     None
@@ -949,8 +1006,13 @@ impl Playground {
                 }
                 let config = field(body, "config")?;
                 let approved = pg.approved_oracle_sha(root, config)?;
-                crate::reconstruction::run_oracles(root, config, &approved, &|| false)
+                let operation = pg.begin_oracle(&project.id, body["operationId"].as_str())?;
+                let mut result = crate::reconstruction::run_oracles(root, config, &approved,
+                    &|| operation.cancelled.load(Ordering::Acquire))?;
+                result["operationId"] = json!(operation.id);
+                Ok(result)
             }
+            "oracle-stop" => pg.stop_oracle(&project.id, field(body, "operationId")?),
             "command" => ShellHostEngine::run_bash_command(root, field(body, "command")?),
             "run" => {
                 let prompt = field(body, "prompt")?.trim();
@@ -960,23 +1022,13 @@ impl Playground {
                 if prompt.len() > 32_000 {
                     bail!("Task is too long");
                 }
-                let model = field(body, "model")?.to_owned();
-                let providers = engine.provider_manager.state.read();
-                let Some(provider) = providers
-                    .providers
-                    .iter()
-                    .find(|p| p.configured && p.selected_model == model)
-                    .or_else(|| {
-                        providers
-                            .providers
-                            .iter()
-                            .find(|p| p.configured && p.models.iter().any(|m| m.id == model))
-                    })
-                    .map(|p| p.id.clone())
-                else {
-                    bail!("Configure this model's provider first");
-                };
-                drop(providers);
+                let (provider, model, context_tokens) = engine.provider_manager
+                    .run_selection(field(body, "model")?, body["provider"].as_str())?;
+                let requested_budget = body["contextBudget"].as_u64()
+                    .map(|n| n.clamp(50_000, 2_000_000) as usize).unwrap_or(DEFAULT_CONTEXT_BUDGET);
+                let requested_output = body["maxOutputTokens"].as_u64()
+                    .map(|n| n.clamp(256, 128_000) as u32);
+                let limits = context_limits(context_tokens, requested_budget, requested_output)?;
                 let mode = body.get("mode").and_then(Value::as_str).unwrap_or("ask");
                 if !matches!(mode, "ask" | "code") {
                     bail!("Unknown run mode");
@@ -1016,13 +1068,12 @@ impl Playground {
                         .as_u64()
                         .map(|n| n.clamp(1, 100) as u32)
                         .unwrap_or(DEFAULT_MAX_STEPS),
-                    context_budget: body["contextBudget"]
-                        .as_u64()
-                        .map(|n| n.clamp(50_000, 2_000_000) as usize)
-                        .unwrap_or(DEFAULT_CONTEXT_BUDGET),
-                    max_output_tokens: body["maxOutputTokens"]
-                        .as_u64()
-                        .map(|n| n.clamp(256, 128_000) as u32),
+                    context_budget: limits["inputBudgetBytes"].as_u64().unwrap() as usize,
+                    max_output_tokens: Some(limits["outputTokens"].as_u64().unwrap() as u32),
+                    artifact_identity: body["reaEnabled"].as_bool().unwrap_or(false).then(||
+                        crate::analysis::capture_artifact_identity(&engine.analysis.target.lock())),
+                    context_limits: Some(limits),
+                    checkpoint: None,
                     actual_model: None,
                     changes: vec![],
                     confirm_commands: confirm_commands.into(),
@@ -1034,6 +1085,8 @@ impl Playground {
                     steps: 0,
                 };
                 {
+                    let oracle_operation = pg.oracle_operation.lock();
+                    if oracle_operation.is_some() { bail!("Finish or stop the active oracle suite before starting a model task"); }
                     let mut runs = pg.runs.lock();
                     if runs
                         .values()
@@ -1911,7 +1964,7 @@ fn response_stub(response: &str) -> String {
     }
 }
 
-/// Keep the conversation within `budget` characters: replace the oldest entries with their stubs,
+/// Keep the conversation within `budget` UTF-8 bytes: replace the oldest entries with their stubs,
 /// keeping the original task/protocol exchange. Returns (compacted, dropped exchanges).
 fn compact_history(
     history: &mut Vec<(String, String)>,
@@ -1921,7 +1974,7 @@ fn compact_history(
 ) -> (usize, usize) {
     let mut total = history.iter().map(|(_, text)| text.len()).sum::<usize>() + pending;
     let (mut compacted, mut dropped) = (0, 0);
-    let mut index = 2;
+    let mut index = 1;
     while total > budget && index < history.len() {
         if let Some(stub) = stubs[index].take() {
             if stub.len() < history[index].1.len() {
@@ -1933,12 +1986,59 @@ fn compact_history(
         index += 1;
     }
     // Last resort when even the stubs do not fit: remove the oldest exchanges.
-    while total > budget && history.len() > 4 {
+    while total > budget && history.len() > 2 {
         total -= history.drain(2..4).map(|(_, text)| text.len()).sum::<usize>();
         stubs.drain(2..4);
         dropped += 1;
     }
     (compacted, dropped)
+}
+
+fn validate_brief_identity(saved: Option<&Value>, current: &Value) -> Result<()> {
+    if current["kind"] == "file" {
+        let saved = saved.and_then(crate::analysis::verified_sha256);
+        let current = crate::analysis::verified_sha256(current);
+        if saved.is_none() || saved != current {
+            bail!("This analysis brief was created for a different or unverified artifact build. Create a new brief for the current file, or export without the old brief and review a manual specification. The original brief is preserved.");
+        }
+    } else if current["kind"] != "directory" {
+        bail!("The selected artifact's identity cannot be established for this brief");
+    }
+    // Directory content has no stable manifest yet; exported provenance remains unverified.
+    Ok(())
+}
+
+/// One input byte is charged as one token, plus a reserve for system text and
+/// message framing. This intentionally conservative bound is not tokenization;
+/// correctness still depends on the configured context matching the serving endpoint.
+fn context_limits(context_tokens: u32, requested_bytes: usize, requested_output: Option<u32>) -> Result<Value> {
+    let reserve = 2_048u32;
+    let output = requested_output.unwrap_or_else(||
+        crate::providers::default_max_output_tokens().min((context_tokens / 4).max(256)));
+    let input = context_tokens.checked_sub(output).and_then(|n| n.checked_sub(reserve))
+        .filter(|n| *n >= 4_096)
+        .context("The selected model's configured context is too small for the output limit and agent protocol. Reduce Max output tokens or configure the endpoint's actual larger context.")?;
+    Ok(json!({"modelContextTokens":context_tokens,"outputTokens":output,
+        "reserveTokens":reserve,"inputBudgetBytes":requested_bytes.min(input as usize),
+        "requestedInputBudgetBytes":requested_bytes,"method":"conservative-utf8-byte-bound",
+        "capacitySource":"configured model/connection metadata; not measured"}))
+}
+
+fn save_checkpoint(pg: &Playground, run: &Run, step: u32, notes: &str,
+    conversation: (&[(String, String)], &[Option<String>]), pending: Option<&Value>, next: &str) {
+    let (history, stubs) = conversation;
+    let history: Vec<Value> = history.iter().enumerate().skip(history.len().saturating_sub(12))
+        .filter(|(i, _)| *i > 0)
+        .map(|(i, (role, text))| json!({"role":role,"summary":stubs.get(i)
+            .and_then(Option::as_deref).map(str::to_owned).unwrap_or_else(|| response_stub(text))}))
+        .collect();
+    pg.update(&run.id, |r| r.checkpoint = Some(json!({
+        "step":step,"updatedAt":chrono::Utc::now().to_rfc3339(),"notes":notes,
+        "phase":if pending.is_some(){"in_progress"}else{"ready"},
+        "pendingAction":pending.map(|p| shrink(p, 500, 8)),"recentHistory":history,
+        "nextContext":next.chars().take(4_000).collect::<String>(),
+        "automaticReplay":false
+    })));
 }
 
 type CompleteFn<'a> =
@@ -1996,7 +2096,7 @@ fn execute(engine: &Arc<QuixiEngine>, project: &Project, run: &Run) -> Result<()
     engine.playground.event(
         &run.id,
         "started",
-        json!({"model": run.model, "mode": run.mode, "project": project.path, "maxSteps": max_steps}),
+        json!({"model": run.model, "provider":run.provider,"mode": run.mode, "project": project.path, "maxSteps": max_steps,"contextLimits":run.context_limits}),
     );
     let rea_enabled = run.rea_enabled;
     let code = run.mode == "code";
@@ -2079,6 +2179,7 @@ fn agent_loop(
     // Compact replacements for each history entry, used once the context budget is exceeded.
     let mut stubs = Vec::<Option<String>>::new();
     let mut notes = String::new();
+    let protocol_bytes = initial_prompt.len();
     let mut prompt = initial_prompt;
     let mut prompt_stub: Option<String> = None;
     for step in 0..max_steps {
@@ -2098,11 +2199,19 @@ fn agent_loop(
                 json!({"compacted": compacted, "droppedExchanges": dropped, "budget": run.context_budget}),
             );
         }
+        let input_bytes = request_prompt.len() + history.iter().map(|(_, text)| text.len()).sum::<usize>();
+        if input_bytes > run.context_budget {
+            bail!("The task/protocol and latest evidence require {input_bytes} input bytes, exceeding this model's conservative {}-byte input budget. Narrow the task or evidence, shorten working notes, or configure a larger context. No oversized request was sent.", run.context_budget);
+        }
+        save_checkpoint(pg, run, step, &notes, (&history, &stubs), None,
+            prompt_stub.as_deref().unwrap_or(&prompt));
+        let selected_model = run.provider.as_deref().map(|p| format!("{p}::{}",run.model))
+            .unwrap_or_else(||run.model.clone());
         let request = CompletionRequest {
             prompt: &request_prompt,
             cwd: &project.path,
             history: &history,
-            model: Some(&run.model),
+            model: Some(&selected_model),
             json_mode: true,
             strict_model: true,
             max_output_tokens: run.max_output_tokens,
@@ -2115,7 +2224,7 @@ fn agent_loop(
         });
         let response = match outcome {
             Ok(done) => {
-                if !done.provider.is_empty() && run.provider.as_deref() != Some(done.provider.as_str()) {
+                if !done.provider.is_empty() && run.provider.is_none() {
                     pg.update(&run.id, |r| r.provider = Some(done.provider.clone()));
                 }
                 if done.model != run.model {
@@ -2201,6 +2310,7 @@ fn agent_loop(
                 return Ok(());
             }
         }
+        save_checkpoint(pg, run, step + 1, &notes, (&history, &stubs), Some(&action), "Awaiting this action's observed result");
         // Malformed actions become tool errors the model can correct, not run failures.
         let result = (|| -> Result<Value> {
             if let Some(result) = extra(&name, &action) {
@@ -2295,12 +2405,17 @@ fn agent_loop(
             json!({"command": action["command"], "result": value})
         };
         pg.event(&run.id, if name.is_empty() { "invalid_action" } else { &name }, log);
-        let (serialized, guidance) = bounded_result(&value, RESULT_LIMIT);
+        // Leave room for the retained protocol, working notes, and result guidance.
+        let result_limit = RESULT_LIMIT.min(run.context_budget.saturating_sub(
+            protocol_bytes + notes.len() + run.prompt.len() + 6_000).max(512) / 4);
+        let (serialized, guidance) = bounded_result(&value, result_limit);
         prompt_stub = Some(result_stub(&name, &action, &value, serialized.chars().count()));
         prompt = format!(
             "Result of {name}: {serialized}{guidance}\nContinue with ONE JSON action. Original task: {}",
             run.prompt
         );
+        save_checkpoint(pg, run, step + 1, &notes, (&history, &stubs), None,
+            prompt_stub.as_deref().unwrap_or(&prompt));
         pg.update(&run.id, |r| r.reply.clear());
     }
     bail!("Run reached the {max_steps}-step limit. Review the files and activity before continuing.")
@@ -2309,6 +2424,79 @@ fn agent_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brief_requires_the_same_verified_file_build() {
+        let first = json!({"status":"verified","kind":"file","sha256":"a".repeat(64)});
+        let second = json!({"status":"verified","kind":"file","sha256":"b".repeat(64)});
+        assert!(validate_brief_identity(Some(&first), &first).is_ok());
+        assert!(validate_brief_identity(Some(&first), &second).is_err());
+        assert!(validate_brief_identity(None, &first).is_err());
+        assert!(validate_brief_identity(Some(&first), &json!({"kind":"unavailable"})).is_err());
+        assert!(validate_brief_identity(None, &json!({"status":"unverified","kind":"directory"})).is_ok());
+    }
+
+    #[test]
+    fn direct_oracle_cancellation_is_scoped_and_cleans_up_on_error() {
+        let fixture = Fixture::new();
+        let id = Uuid::new_v4().to_string();
+        let lease = fixture.pg.begin_oracle("test", Some(&id)).unwrap();
+        assert!(fixture.pg.begin_oracle("other", None).is_err());
+        assert!(fixture.pg.stop_oracle("wrong-project", &id).is_err());
+        assert!(!lease.cancelled.load(Ordering::Acquire));
+        assert!(fixture.pg.stop_oracle("test", &Uuid::new_v4().to_string()).is_err());
+        assert_eq!(fixture.pg.stop_oracle("test", &id).unwrap()["cancellationRequested"], true);
+        assert!(lease.cancelled.load(Ordering::Acquire));
+        drop(lease);
+        assert!(fixture.pg.oracle_operation.lock().is_none());
+        assert!(fixture.pg.begin_oracle("test", None).is_ok());
+        fixture.pg.runs.lock().insert("running".into(), test_run("Busy", "ask"));
+        assert!(fixture.pg.begin_oracle("test", None).is_err());
+    }
+
+    #[test]
+    fn model_context_reserves_output_and_rejects_impossible_limits() {
+        let limits = context_limits(32768, 300000, Some(4096)).unwrap();
+        assert_eq!(limits["inputBudgetBytes"], 26624);
+        assert_eq!(limits["reserveTokens"], 2048);
+        assert_eq!(limits["outputTokens"], 4096);
+        assert_eq!(context_limits(32768, 10000, Some(4096)).unwrap()["inputBudgetBytes"], 10000);
+        assert!(context_limits(8192, 300000, Some(4096)).is_err());
+        assert_eq!(context_limits(32768, 300000, None).unwrap()["outputTokens"],
+            crate::providers::default_max_output_tokens().min(8192));
+    }
+
+    #[test]
+    fn oversize_initial_task_is_rejected_before_model_request() {
+        let fixture = Fixture::new();
+        let mut run = test_run("Read", "ask");
+        run.context_budget = 8;
+        let (result, _, seen) = fixture.drive(run, vec![]);
+        assert!(result.unwrap_err().to_string().contains("No oversized request was sent"));
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn investigation_checkpoint_survives_restart_without_replaying_actions() {
+        let fixture = Fixture::new();
+        let mut run = test_run("Investigate", "code");
+        run.max_steps = 2;
+        let id = run.id.clone();
+        let (result, saved, _) = fixture.drive(run, vec![
+            Ok(r#"{"action":"note","content":"REQ-7: observed entry point; inspect its callers next"}"#.into()),
+            Ok(r#"{"action":"write","path":"checkpoint.txt","content":"observed","hash":""}"#.into()),
+        ]);
+        assert!(result.is_err());
+        assert!(saved.checkpoint.as_ref().unwrap()["notes"].as_str().unwrap().contains("REQ-7"));
+        assert_eq!(saved.checkpoint.as_ref().unwrap()["phase"], "ready");
+        let restarted = Playground::new(&fixture.data);
+        assert_eq!(restarted.runs.lock()[&id].status, "interrupted");
+        let summary = restarted.parent_summary("test", &id).unwrap();
+        assert!(summary.contains("REQ-7") && summary.contains("never replay"));
+        assert_eq!(fs::read_to_string(fixture.root().join("checkpoint.txt")).unwrap(), "observed");
+        assert!(restarted.decisions.lock().is_empty());
+        assert_eq!(restarted.task_record("test", &json!({"id":id})).unwrap()["checkpoint"]["automaticReplay"], false);
+    }
 
     fn test_run(prompt: &str, mode: &str) -> Run {
         Run {
@@ -2325,6 +2513,9 @@ mod tests {
             max_steps: DEFAULT_MAX_STEPS,
             context_budget: DEFAULT_CONTEXT_BUDGET,
             max_output_tokens: None,
+            artifact_identity: None,
+            context_limits: None,
+            checkpoint: None,
             actual_model: None,
             changes: vec![],
             confirm_commands: "risky".into(),
@@ -2709,13 +2900,13 @@ mod tests {
         let fixture = Fixture::new();
         fs::write(fixture.root().join("big.txt"), "x".repeat(30_000)).unwrap();
         let mut run = test_run("Read a lot", "code");
-        run.max_steps = 6;
+        run.max_steps = 12;
         run.context_budget = 20_000;
         let mut script = vec![Ok(r#"{"action":"note","content":"REQ-001 verified via big.txt"}"#.into())];
-        script.extend((0..5).map(|_| Ok(r#"{"action":"read","path":"big.txt","limit":12000}"#.into())));
+        script.extend((0..11).map(|_| Ok(r#"{"action":"read","path":"big.txt","limit":12000}"#.into())));
         let (outcome, saved, seen) = fixture.drive(run, script);
-        assert!(outcome.unwrap_err().to_string().contains("6-step limit"));
-        assert_eq!(seen.len(), 6);
+        assert!(outcome.unwrap_err().to_string().contains("12-step limit"));
+        assert_eq!(seen.len(), 12);
         for (prompt, history) in &seen[1..] {
             assert!(prompt.contains("REQ-001 verified via big.txt"));
             let total: usize = history.iter().map(|(_, t)| t.len()).sum::<usize>() + prompt.len();

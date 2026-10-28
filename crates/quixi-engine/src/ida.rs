@@ -701,11 +701,10 @@ mod tests {
     /// Live end-to-end check. Set QUIXI_TEST_IDA_HEADLESS to a rea-headless-registration.json
     /// and optionally QUIXI_TEST_IDA_TARGET to a PE file (default: this test executable).
     #[test]
+    #[ignore = "requires a licensed IDA headless bridge; run explicitly with --ignored"]
     fn live_headless_bridge_round_trip() {
-        let Ok(registration) = std::env::var("QUIXI_TEST_IDA_HEADLESS") else {
-            eprintln!("skipped: set QUIXI_TEST_IDA_HEADLESS to run");
-            return;
-        };
+        let registration = std::env::var("QUIXI_TEST_IDA_HEADLESS")
+            .expect("set QUIXI_TEST_IDA_HEADLESS before explicitly running this integration test");
         let data = scratch("live");
         std::env::set_var("QUIXI_DATA_DIR", &data);
         let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources");
@@ -774,11 +773,12 @@ mod tests {
     /// Live attached check against a running modern ida-pro-mcp HTTP endpoint. Set
     /// QUIXI_TEST_IDA_ATTACHED to its URL and QUIXI_TEST_IDA_ATTACHED_TARGET to the input it has open.
     #[test]
+    #[ignore = "requires a running licensed IDA GUI bridge; run explicitly with --ignored"]
     fn live_attached_bridge_requires_matching_input() {
-        let (Ok(url), Ok(target)) = (std::env::var("QUIXI_TEST_IDA_ATTACHED"), std::env::var("QUIXI_TEST_IDA_ATTACHED_TARGET")) else {
-            eprintln!("skipped: set QUIXI_TEST_IDA_ATTACHED and QUIXI_TEST_IDA_ATTACHED_TARGET to run");
-            return;
-        };
+        let url = std::env::var("QUIXI_TEST_IDA_ATTACHED")
+            .expect("set QUIXI_TEST_IDA_ATTACHED before explicitly running this integration test");
+        let target = std::env::var("QUIXI_TEST_IDA_ATTACHED_TARGET")
+            .expect("set QUIXI_TEST_IDA_ATTACHED_TARGET before explicitly running this integration test");
         let data = scratch("attached");
         std::env::set_var("QUIXI_DATA_DIR", &data);
         let engine = QuixiEngine::new(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources"));

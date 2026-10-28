@@ -3,7 +3,8 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipDependencyDownload,
     [switch]$NoZip,
-    [string]$BuildOutput = ''
+    [string]$BuildOutput = '',
+    [string]$OutputRoot = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -37,7 +38,10 @@ try {
     if (!(Select-String -LiteralPath (Join-Path $runtime 'jdk\release') -Pattern '^JAVA_VERSION="21\.0\.12\.1"$' -Quiet)) { throw 'Unexpected Temurin version.' }
     $version = ((Select-String -LiteralPath Cargo.toml -Pattern '^version = "([^"]+)"$' | Select-Object -First 1).Matches[0].Groups[1].Value)
     $name = "REA-Studio-$version-x64"
-    $output = Join-Path $repo "dist\$name"
+    if (!$OutputRoot) { $OutputRoot = Join-Path $repo 'dist' }
+    $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
+    New-Item $OutputRoot -ItemType Directory -Force | Out-Null
+    $output = Join-Path $OutputRoot $name
     if ((Test-Path $output) -or (Test-Path "$output.zip")) { throw "Output exists: $output. Choose a new version or move the old output aside." }
     New-Item $output -ItemType Directory -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $BuildOutput 'REAStudio.exe') -Destination $output

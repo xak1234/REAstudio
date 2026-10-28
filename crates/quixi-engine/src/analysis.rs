@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    io::Read,
     path::{Component, Path, PathBuf, Prefix},
     sync::Arc,
 };
@@ -22,6 +23,10 @@ pub struct AnalysisWorkspace {
     pub provider_sessions: Mutex<HashMap<String,u32>>,
     /// The binary REA reports open, keyed by the REA process that opened it.
     rea_target: Mutex<Option<(u32, String)>>,
+    /// Content identity established when this process opened its native target.
+    rea_identity: Mutex<Option<(u32, String, Value)>>,
+    /// Keep snapshots, the provider operation and evidence attribution together.
+    operation: Mutex<()>,
     index: Mutex<()>,
 }
 
@@ -145,9 +150,136 @@ fn observe_session(session: &Value, process_id: u32, open: &mut Option<(u32, Str
     }
 }
 
+fn valid_sha256(value: &Value) -> Option<String> {
+    value.as_str().filter(|hash| hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
+}
+
+pub(crate) fn verified_sha256(identity: &Value) -> Option<String> {
+    if identity["status"] == "verified" && identity["kind"] == "file" {
+        valid_sha256(&identity["sha256"])
+    } else { None }
+}
+
+/// Hash file bytes, without loading a large artifact into memory. Directories do not
+/// have a content identity until a complete, stable file manifest is implemented.
+pub(crate) fn capture_artifact_identity(target: &str) -> Value {
+    if target.is_empty() || is_non_local_path(Path::new(target)) {
+        return json!({"status":"unverified","kind":"unavailable","reason":"No local artifact is available"});
+    }
+    let captured = (|| -> Result<Value> {
+        let mut file = fs::File::open(target)?;
+        let before = file.metadata()?;
+        if !before.is_file() {
+            return Ok(json!({"status":"unverified","kind":"directory","reason":"Directory content identity is not supported; no complete file manifest was captured"}));
+        }
+        let mut digest = Sha256::new();
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 { break; }
+            digest.update(&buffer[..count]);
+        }
+        let after = file.metadata()?;
+        if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+            return Ok(json!({"status":"changed","kind":"file","reason":"The artifact changed while its identity was being captured"}));
+        }
+        Ok(json!({"status":"verified","kind":"file","algorithm":"sha256",
+            "sha256":format!("{:x}", digest.finalize()),"size":after.len()}))
+    })();
+    // Opening a directory as a File is unsupported on Windows.
+    if fs::metadata(target).is_ok_and(|metadata| metadata.is_dir()) {
+        return json!({"status":"unverified","kind":"directory","reason":"Directory content identity is not supported; no complete file manifest was captured"});
+    }
+    captured.unwrap_or_else(|error| json!({"status":"unverified","kind":"unavailable","reason":format!("Could not establish artifact identity: {error}")}))
+}
+
+fn checked_identity(before: &Value, after: &Value) -> Value {
+    match (verified_sha256(before), verified_sha256(after)) {
+        (Some(first), Some(last)) if first == last => {
+            let mut identity = after.clone();
+            identity["verification"] = json!("hashed-before-and-after");
+            identity
+        }
+        (Some(first), last) => json!({"status":"changed","kind":"file",
+            "beforeSha256":first,"afterSha256":last,"reason":"Artifact bytes changed or became unavailable during analysis"}),
+        _ if before["status"] == "changed" || after["status"] == "changed" =>
+            json!({"status":"changed","kind":"file","reason":"Artifact identity was unstable during analysis"}),
+        _ => before.clone(),
+    }
+}
+
+fn checked_analysis_identity(before: &Value, after: &Value, process_before: u32, process_after: u32) -> Value {
+    let identity = checked_identity(before, after);
+    if identity["status"] == "changed" { return identity; }
+    if process_before == 0 || process_before != process_after {
+        return json!({"status":"unverified","kind":identity["kind"],"observedSha256":verified_sha256(&identity),
+            "reason":"The REA process ended or changed during this operation","reasonCode":"provider-session-ended"});
+    }
+    identity
+}
+
+fn retained_result_identity(tool: &str, identity: Value) -> Value {
+    if matches!(tool, "inspect_analysis_view" | "get_evidence_bundle") && verified_sha256(&identity).is_some() {
+        // A retained view can originate from an earlier open of the same path.
+        // Current filesystem bytes cannot establish that view's content identity.
+        json!({"status":"unverified","kind":"file","observedSha256":verified_sha256(&identity),
+            "reason":"The retained reference has no verified link to its original artifact version",
+            "reasonCode":"retained-reference-origin-unverified"})
+    } else { identity }
+}
+
+/// Playground calls carry routing context as well as settings. It is not a
+/// RuntimeSettings field and must not turn a read into a configuration write.
+fn runtime_settings_patch(body: &Value) -> Result<Value> {
+    let mut patch = body.as_object().context("REA settings must be a JSON object")?.clone();
+    patch.remove("project");
+    Ok(Value::Object(patch))
+}
+
+/// Recheck the brief at the export boundary. The UI/agent may have validated it
+/// before a different artifact was selected or the source file was rebuilt.
+fn validate_dossier_brief(brief: &Value, target: &str, current: &Value) -> Result<()> {
+    let brief_target = brief["target"].as_str()
+        .context("This analysis brief has no captured artifact target. Create a new brief or export without it; the original brief is preserved.")?;
+    if !same_target(brief_target, target) {
+        bail!("This analysis brief belongs to another artifact. The selected target changed before export; select its artifact or create a new brief. The original brief is preserved.");
+    }
+    let saved = &brief["artifactIdentity"];
+    if current["kind"] == "file" {
+        let expected = verified_sha256(current);
+        if expected.is_none() || verified_sha256(saved) != expected {
+            bail!("This analysis brief was created for a different or unverified artifact build. Create a new brief for the captured file, or export without the old brief. The original brief is preserved.");
+        }
+    } else if current["kind"] != "directory" || saved["kind"] != "directory" {
+        bail!("The analysis brief and captured artifact do not have matching identity kinds. Create a new brief or export without it; the original brief is preserved.");
+    }
+    // Directory exports remain explicitly unverified: matching paths/kinds are
+    // not a claim that every file in the directory stayed unchanged.
+    Ok(())
+}
+
+/// Old IDA records already carry a provider-verified input digest. Other historical
+/// records cannot be assigned today's hash: doing so would relabel old evidence.
+fn record_identity(record: &Value) -> Value {
+    if let Some(identity) = record.get("artifactIdentity").filter(|value| value.is_object()) {
+        if identity["status"] != "verified" || verified_sha256(identity).is_some() {
+            return identity.clone();
+        }
+    }
+    if record["provider"] == "ida-bridge" {
+        if let Some(sha256) = valid_sha256(&record["provenance"]["sha256"]) {
+            return json!({"status":"verified","kind":"file","algorithm":"sha256","sha256":sha256,
+                "verification":"ida-provider-input-hash"});
+        }
+    }
+    json!({"status":"unverified","kind":"unknown","reason":"This record has no verified artifact content identity"})
+}
+
 fn record_summary(record: &Value) -> Value {
     json!({"id":record["id"],"tool":record["tool"],"provider":record["provider"],"kind":record["kind"],
-        "created":record["created"],"target":record["target"],"failed":record["failed"]})
+        "created":record["created"],"target":record["target"],"failed":record["failed"],
+        "artifactIdentity":record_identity(record),"identitySchemaVersion":1})
 }
 
 /// A model may inspect the selected artifact or its current project, not choose an
@@ -212,6 +344,8 @@ mod tests {
             target: Mutex::new(String::new()),
             provider_sessions: Mutex::new(HashMap::new()),
             rea_target: Mutex::new(None),
+            rea_identity: Mutex::new(None),
+            operation: Mutex::new(()),
             index: Mutex::new(()),
         }
     }
@@ -378,7 +512,8 @@ mod tests {
         let analysis = AnalysisWorkspace::new(&base.join("profile"));
         *analysis.target.lock() = artifact.to_string_lossy().into_owned();
         let id = Uuid::new_v4().to_string();
-        let record = json!({"id":id,"target":artifact,"tool":"inspect_pe_resources","failed":true,"response":{"isError":true},"created":"2026-01-01"});
+        let record = json!({"id":id,"target":artifact,"tool":"inspect_pe_resources","failed":true,"response":{"isError":true},"created":"2026-01-01",
+            "artifactIdentity":capture_artifact_identity(&artifact.to_string_lossy())});
         let bytes = serde_json::to_vec_pretty(&record).unwrap();
         fs::write(analysis.record_path(&id).unwrap(), &bytes).unwrap();
         let unrelated = Uuid::new_v4().to_string();
@@ -409,6 +544,175 @@ mod tests {
             .unwrap();
         assert_ne!(exported["path"], next["path"]);
         assert_eq!(fs::read(artifact).unwrap(), b"analysis input");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn artifact_hashes_detect_changed_bytes_and_do_not_claim_directory_identity() {
+        let base = std::env::temp_dir().join(format!("quixi-artifact-{}", Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let file = base.join("target.bin");
+        fs::write(&file, b"abc").unwrap();
+        let before = capture_artifact_identity(&file.to_string_lossy());
+        assert_eq!(before["sha256"], "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(checked_identity(&before, &capture_artifact_identity(&file.to_string_lossy()))["status"], "verified");
+        // Identical bytes must not make a disconnected/replaced provider session verified.
+        assert_eq!(checked_analysis_identity(&before, &before, 42, 42)["status"], "verified");
+        for process_after in [0, 43] {
+            let interrupted = checked_analysis_identity(&before, &before, 42, process_after);
+            assert_eq!(interrupted["status"], "unverified");
+            assert_eq!(interrupted["reasonCode"], "provider-session-ended");
+        }
+        for tool in ["inspect_analysis_view", "get_evidence_bundle"] {
+            let retained = retained_result_identity(tool, before.clone());
+            assert!(verified_sha256(&retained).is_none());
+            assert_eq!(retained["reasonCode"], "retained-reference-origin-unverified");
+        }
+        // Same length, different bytes: identity must use content, not file size.
+        fs::write(&file, b"abd").unwrap();
+        let after = capture_artifact_identity(&file.to_string_lossy());
+        let changed = checked_identity(&before, &after);
+        assert_eq!(changed["status"], "changed");
+        assert_eq!(changed["beforeSha256"], before["sha256"]);
+        assert_eq!(changed["afterSha256"], after["sha256"]);
+        let directory = capture_artifact_identity(&base.to_string_lossy());
+        assert_eq!(directory["status"], "unverified");
+        assert_eq!(directory["kind"], "directory");
+        assert!(verified_sha256(&directory).is_none());
+        fs::remove_dir_all(&base).unwrap();
+        assert_eq!(checked_identity(&before, &capture_artifact_identity(&file.to_string_lossy()))["status"], "changed");
+    }
+
+    #[test]
+    fn runtime_settings_ignores_playground_project_context() {
+        assert_eq!(runtime_settings_patch(&json!({"project":"project-123"})).unwrap(), json!({}));
+        assert_eq!(runtime_settings_patch(&json!({"project":"project-123","mode":"bundled","ghidraHeapMiB":4096})).unwrap(),
+            json!({"mode":"bundled","ghidraHeapMiB":4096}));
+        assert!(runtime_settings_patch(&json!([])).is_err());
+    }
+
+    #[test]
+    fn dossier_filters_replaced_binary_versions_without_relabelling_legacy_records() {
+        let base = std::env::temp_dir().join(format!("quixi-versioned-dossier-{}", Uuid::new_v4()));
+        let original = base.join("original");
+        let destination = base.join("rebuild");
+        fs::create_dir_all(&original).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        let artifact = original.join("target.bin");
+        let target = artifact.to_string_lossy().into_owned();
+        fs::write(&artifact, b"version-one").unwrap();
+        let old_identity = capture_artifact_identity(&target);
+        let analysis = AnalysisWorkspace::new(&base.join("profile"));
+        *analysis.target.lock() = target.clone();
+        let old_id = Uuid::new_v4().to_string();
+        analysis.save_record(&json!({"id":old_id,"target":target,"provider":"rea","tool":"list_procedures",
+            "created":"2026-01-01","artifactIdentity":old_identity})).unwrap();
+        let legacy_id = Uuid::new_v4().to_string();
+        let legacy = json!({"id":legacy_id,"target":target,"provider":"rea","tool":"procedure_pseudo_code","created":"2026-01-02"});
+        analysis.save_record(&legacy).unwrap();
+        let legacy_bytes = fs::read(analysis.record_path(&legacy_id).unwrap()).unwrap();
+        fs::write(&artifact, b"version-two").unwrap();
+        let current = capture_artifact_identity(&target);
+        let current_id = Uuid::new_v4().to_string();
+        analysis.save_record(&json!({"id":current_id,"target":target,"provider":"rea","tool":"inspect_pe_resources",
+            "created":"2026-01-03","failed":true,"response":{"isError":true},"artifactIdentity":current})).unwrap();
+        // Historical IDA observations already have a trustworthy provider input hash.
+        let ida_id = Uuid::new_v4().to_string();
+        analysis.save_record(&json!({"id":ida_id,"target":target,"provider":"ida-bridge","tool":"decompile",
+            "created":"2026-01-03","provenance":{"sha256":current["sha256"]}})).unwrap();
+        let changed_id = Uuid::new_v4().to_string();
+        analysis.save_record(&json!({"id":changed_id,"target":target,"provider":"rea","tool":"list_procedures",
+            "created":"2026-01-04","failed":true,"artifactIdentity":checked_identity(&old_identity,&current)})).unwrap();
+
+        let exported = analysis.export_dossier(&destination, &json!({}), None).unwrap();
+        assert_eq!(exported["records"], 2);
+        assert_eq!(exported["excludedRecordCount"], 3);
+        let excluded = exported["excludedRecords"].as_array().unwrap();
+        assert!(excluded.iter().any(|r| r["id"] == old_id && r["reason"] == "different-artifact-version"));
+        assert!(excluded.iter().any(|r| r["id"] == legacy_id && r["reason"] == "unverified-artifact-identity"));
+        assert!(excluded.iter().any(|r| r["id"] == changed_id && r["reason"] == "artifact-changed-during-analysis"));
+        let folder = Path::new(exported["path"].as_str().unwrap());
+        let manifest: Value = serde_json::from_slice(&fs::read(folder.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["artifactIdentity"]["sha256"], format!("{:x}",Sha256::digest(b"version-two")));
+        for record in manifest["records"].as_array().unwrap() {
+            let bytes = fs::read(folder.join(record["file"].as_str().unwrap())).unwrap();
+            assert_eq!(record["sha256"], format!("{:x}",Sha256::digest(&bytes)));
+            assert_eq!(record["artifactIdentity"]["sha256"], current["sha256"]);
+        }
+        assert_eq!(fs::read(analysis.record_path(&legacy_id).unwrap()).unwrap(), legacy_bytes);
+        assert!(analysis.record_path(&old_id).unwrap().is_file());
+        let groups = analysis.inventory()["artifactGroups"].as_array().unwrap().clone();
+        assert!(groups.iter().any(|group| group["sha256"] == old_identity["sha256"] && group["recordCount"] == 1));
+        assert!(groups.iter().any(|group| group["sha256"] == current["sha256"] && group["recordCount"] == 2));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn old_index_is_upgraded_without_modifying_evidence_and_directories_stay_available() {
+        let base = std::env::temp_dir().join(format!("quixi-identity-index-{}", Uuid::new_v4()));
+        let original = base.join("javascript-app");
+        let destination = base.join("rebuild");
+        fs::create_dir_all(&original).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(original.join("app.js"), b"console.log('example');").unwrap();
+        let analysis = AnalysisWorkspace::new(&base.join("profile"));
+        *analysis.target.lock() = original.to_string_lossy().into_owned();
+        let id = Uuid::new_v4().to_string();
+        let record = json!({"id":id,"target":original,"provider":"rea","tool":"analyze_javascript_application","created":"2026-01-01"});
+        analysis.save_record(&record).unwrap();
+        let original_bytes = fs::read(analysis.record_path(&id).unwrap()).unwrap();
+        let mut old_index = serde_json::Map::new();
+        old_index.insert(id.clone(), json!({"id":id,"target":original,"tool":"analyze_javascript_application","created":"2026-01-01"}));
+        fs::write(analysis.dir.join(INDEX_FILE), serde_json::to_vec(&old_index).unwrap()).unwrap();
+        let inventory = analysis.inventory();
+        assert_eq!(inventory["records"][0]["identitySchemaVersion"], 1);
+        assert_eq!(inventory["records"][0]["artifactIdentity"]["status"], "unverified");
+        assert_eq!(fs::read(analysis.record_path(&id).unwrap()).unwrap(), original_bytes);
+        let exported = analysis.export_dossier(&destination, &json!({}), None).unwrap();
+        assert_eq!(exported["records"], 1);
+        assert_eq!(exported["artifactIdentity"]["kind"], "directory");
+        assert_eq!(exported["artifactIdentity"]["status"], "unverified");
+        let brief = json!({"target":original,"artifactIdentity":capture_artifact_identity(&original.to_string_lossy()),"reply":"Directory analysis remains unverified."});
+        let with_brief = analysis.export_dossier(&destination, &json!({}), Some(brief)).unwrap();
+        assert_eq!(with_brief["hasBrief"], true);
+        assert_eq!(with_brief["artifactIdentity"]["status"], "unverified");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn dossier_rechecks_brief_against_its_own_target_and_content_snapshot() {
+        let base = std::env::temp_dir().join(format!("quixi-brief-snapshot-{}", Uuid::new_v4()));
+        let original = base.join("original");
+        let destination = base.join("rebuild");
+        fs::create_dir_all(&original).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        let artifact = original.join("first.bin");
+        let other = original.join("second.bin");
+        fs::write(&artifact, b"first version").unwrap();
+        fs::write(&other, b"first version").unwrap();
+        let target = artifact.to_string_lossy().into_owned();
+        let analysis = AnalysisWorkspace::new(&base.join("profile"));
+        *analysis.target.lock() = target.clone();
+        // This models a brief accepted by the caller before the export boundary.
+        let brief = json!({"target":target,"artifactIdentity":capture_artifact_identity(&target),"reply":"Original build specification."});
+        fs::write(&artifact, b"later version").unwrap();
+        let changed = analysis.export_dossier(&destination, &json!({}), Some(brief.clone())).unwrap_err();
+        assert!(changed.to_string().contains("different or unverified artifact build"));
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+
+        // Even identical bytes at another selected path must not substitute a
+        // different artifact under the already reviewed brief.
+        *analysis.target.lock() = other.to_string_lossy().into_owned();
+        let switched = analysis.export_dossier(&destination, &json!({}), Some(brief.clone())).unwrap_err();
+        assert!(switched.to_string().contains("another artifact"));
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+        let mut matching = brief;
+        matching["target"] = json!(other);
+        let exported = analysis.export_dossier(&destination, &json!({}), Some(matching)).unwrap();
+        let manifest: Value = serde_json::from_slice(&fs::read(Path::new(exported["path"].as_str().unwrap()).join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["brief"]["target"], manifest["target"]);
+        assert_eq!(manifest["brief"]["artifactIdentity"]["sha256"], manifest["artifactIdentity"]["sha256"]);
+        assert_eq!(manifest["artifactIdentity"]["sha256"], format!("{:x}",Sha256::digest(b"first version")));
         fs::remove_dir_all(base).unwrap();
     }
 }
@@ -484,6 +788,8 @@ impl AnalysisWorkspace {
             target: Mutex::new(target),
             provider_sessions: Mutex::new(HashMap::new()),
             rea_target: Mutex::new(None),
+            rea_identity: Mutex::new(None),
+            operation: Mutex::new(()),
             index: Mutex::new(()),
         }
     }
@@ -513,7 +819,7 @@ impl AnalysisWorkspace {
                 else {
                     continue;
                 };
-                if !index.contains_key(&id) {
+                if index.get(&id).is_none_or(|summary| summary["identitySchemaVersion"] != 1) {
                     let Some(record) = fs::read(&path)
                         .ok()
                         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -533,8 +839,25 @@ impl AnalysisWorkspace {
         }
         let mut records: Vec<Value> = index.into_values().collect();
         records.sort_by(|a, b| b["created"].as_str().cmp(&a["created"].as_str()));
+        let mut groups: std::collections::BTreeMap<(String, String), Value> = std::collections::BTreeMap::new();
+        for record in &records {
+            let target = record["target"].as_str().unwrap_or("");
+            if target.is_empty() { continue; }
+            let identity = &record["artifactIdentity"];
+            let sha256 = verified_sha256(identity);
+            let identity_key = sha256.clone().unwrap_or_else(|| format!("{}:{}",
+                identity["status"].as_str().unwrap_or("unverified"), identity["kind"].as_str().unwrap_or("unknown")));
+            let group = groups.entry((lexical_key(target), identity_key)).or_insert_with(||
+                json!({"target":target,"sha256":sha256,"identityStatus":identity["status"],"artifactKind":identity["kind"],
+                    "recordCount":0,"failedRecordCount":0,"latestRecordAt":record["created"]}));
+            group["recordCount"] = json!(group["recordCount"].as_u64().unwrap_or(0) + 1);
+            if record["failed"] == true {
+                group["failedRecordCount"] = json!(group["failedRecordCount"].as_u64().unwrap_or(0) + 1);
+            }
+        }
         let target = self.target.lock().clone();
-        json!({"targetIsDirectory":Path::new(&target).is_dir(),"target":target,"records":records})
+        json!({"targetIsDirectory":Path::new(&target).is_dir(),"target":target,"records":records,
+            "artifactGroups":groups.into_values().collect::<Vec<_>>(),"identitySchemaVersion":1})
     }
     fn write_index(&self, index: &serde_json::Map<String, Value>) {
         let temporary = self.dir.join(format!("{INDEX_FILE}.tmp"));
@@ -574,10 +897,23 @@ impl AnalysisWorkspace {
     pub fn save_external(&self, provider: &str, kind: &str, tool: &str, arguments: Value,
         target: &str, response: Value, provenance: Value) -> Result<Value> {
         let id = Uuid::new_v4().to_string();
-        let record = json!({"id":id,"provider":provider,"kind":kind,"tool":tool,
+        let mut record = json!({"id":id,"provider":provider,"kind":kind,"tool":tool,
             "arguments":arguments,"target":canonical_target(target),"selectedTarget":*self.target.lock(),
             "created":chrono::Utc::now().to_rfc3339(),"failed":response["isError"]==true,
             "response":response,"provenance":provenance});
+        let mut identity = record_identity(&record);
+        if identity["status"] != "verified" {
+            if let Some(source_id) = record["provenance"]["sourceRecordId"].as_str() {
+                if let Ok(source) = self.read_record(source_id) {
+                    if same_target(source["target"].as_str().unwrap_or(""), target) {
+                        identity = record_identity(&source);
+                        identity["verification"] = json!("inherited-from-source-record");
+                        identity["sourceRecordId"] = json!(source_id);
+                    }
+                }
+            }
+        }
+        record["artifactIdentity"] = identity;
         self.save_record(&record)
             .context("Could not save the analysis observation")?;
         Ok(record)
@@ -605,7 +941,16 @@ impl AnalysisWorkspace {
         if root.starts_with(original_folder) || original.starts_with(&root) {
             bail!("Choose a separate destination project outside the original application, with no original artifact inside it");
         }
+        let artifact_identity = capture_artifact_identity(&target);
+        let current_sha256 = verified_sha256(&artifact_identity);
+        if original.is_file() && current_sha256.is_none() {
+            bail!("Cannot export a file dossier without a stable artifact identity: {}", artifact_identity["reason"]);
+        }
+        if let Some(brief) = &brief {
+            validate_dossier_brief(brief, &target, &artifact_identity)?;
+        }
         let mut records = Vec::new();
+        let mut excluded_records = Vec::new();
         let mut total = 0usize;
         let inventory = self.inventory();
         for item in inventory["records"].as_array().into_iter().flatten() {
@@ -619,11 +964,30 @@ impl AnalysisWorkspace {
             }
             let id = item["id"].as_str().context("Invalid saved record")?;
             let bytes = fs::read(self.record_path(id)?)?;
+            let record: Value = serde_json::from_slice(&bytes).context("Saved evidence is not valid JSON")?;
+            let identity = record_identity(&record);
+            if let Some(expected) = &current_sha256 {
+                let reason = match verified_sha256(&identity) {
+                    Some(actual) if &actual == expected => None,
+                    Some(_) => Some("different-artifact-version"),
+                    None if identity["status"] == "changed" => Some("artifact-changed-during-analysis"),
+                    None => Some("unverified-artifact-identity"),
+                };
+                if let Some(reason) = reason {
+                    excluded_records.push(json!({"id":id,"tool":item["tool"],"reason":reason,"artifactIdentity":identity}));
+                    continue;
+                }
+            }
             total += bytes.len();
             if total > 128 * 1024 * 1024 {
                 bail!("This target has more than 128 MiB of saved evidence. Export individual records instead.");
             }
-            records.push((item.clone(), bytes));
+            let mut summary = item.clone();
+            summary["artifactIdentity"] = identity;
+            records.push((summary, bytes));
+        }
+        if current_sha256.is_some() && checked_identity(&artifact_identity, &capture_artifact_identity(&target))["status"] != "verified" {
+            bail!("The artifact changed while preparing the dossier. Select the current build and try again.");
         }
         let name = format!("quixi-reconstruction-{}", Uuid::new_v4());
         let destination = quixi_platform::SafeFs::resolve_beneath(&root, Path::new(&name))?;
@@ -634,7 +998,7 @@ impl AnalysisWorkspace {
             let id = item["id"].as_str().unwrap();
             let file = format!("evidence/{id}.json");
             fs::write(destination.join(&file), bytes)?;
-            manifest.push(json!({"id":id,"file":file,"tool":item["tool"],"provider":item["provider"],"kind":item["kind"],"failed":item["failed"],"created":item["created"],"sha256":format!("{:x}",Sha256::digest(bytes))}));
+            manifest.push(json!({"id":id,"file":file,"tool":item["tool"],"provider":item["provider"],"kind":item["kind"],"failed":item["failed"],"created":item["created"],"sha256":format!("{:x}",Sha256::digest(bytes)),"artifactIdentity":item["artifactIdentity"]}));
         }
         let has_brief = brief.is_some();
         let brief_text = brief.as_ref().and_then(|b| b["reply"].as_str()).unwrap_or("No completed analysis brief was selected. Prepare an analysis task and save another dossier after reviewing its result.");
@@ -646,15 +1010,17 @@ impl AnalysisWorkspace {
         fs::write(
             destination.join("manifest.json"),
             serde_json::to_vec_pretty(&json!({
-                "format":"quixidesk-reconstruction-v1","created":chrono::Utc::now().to_rfc3339(),
+                "format":"quixidesk-reconstruction-v1","identitySchemaVersion":1,"created":chrono::Utc::now().to_rfc3339(),
                 "target":target,"scope":request["scope"],"goal":request["goal"],
                 "userObservations":request["observations"],"brief":brief,"records":manifest,
-                "limitations":["Static evidence does not prove runtime equivalence.","Failed records remain failures; absence of findings is not proof of absence.","Live retained REA references may expire; inline saved responses remain available.","User observations and model inferences require independent verification."]
+                "artifactIdentity":artifact_identity,"excludedRecords":excluded_records,
+                "limitations":["Static evidence does not prove runtime equivalence.","Failed records remain failures; absence of findings is not proof of absence.","Live retained REA references may expire; inline saved responses remain available.","User observations and model inferences require independent verification.","Directory evidence has no verified whole-directory content identity.","Records from another file version or without a verified file identity are excluded, not deleted."]
             }))?,
         )?;
         fs::write(destination.join("README.md"), "# Reconstruction evidence dossier\n\nWorkflow: binary -> REA -> SPEC.md -> rebuild -> oracle -> retry.\n\nReview SPEC.md and manifest.json. Add explicit cases to oracle-cases.json; an empty suite is UNVERIFIED. Use the app's Run oracle checks action to execute those commands in the destination project, then Prepare retry to fix recorded mismatches. See docs/RECONSTRUCTION.md in the application for the case schema.\n\nThe evidence directory contains original saved REA responses, including failures, with SHA-256 digests in the manifest. Record IDs link the specification to those responses; Evidence IDs identify REA observations. Keep implementation tasks on SPEC.md and observed test outputs; analysis tasks own original/decompiled material. This export contains analysis data, not a runnable duplicate or the original application.\n\n## Coverage checklist\n\n- [ ] Target version, identity and selected feature are established.\n- [ ] UI flows, inputs, outputs, state, error cases and data formats are documented.\n- [ ] Dependencies and platform boundaries are identified.\n- [ ] Every supported behaviour links to evidence or a labelled user observation.\n- [ ] Inferences, unavailable resources and remaining unknowns are listed.\n- [ ] New implementation lives outside the original application.\n- [ ] Build checks and behavioural comparisons have actually run.\n\nMark an item complete only after checking it. Passing declared cases does not prove whole-application equivalence. Keep original and reconstructed code/results distinct.\n")?;
         Ok(
-            json!({"path":destination,"relativePath":name,"records":records.len(),"hasBrief":has_brief}),
+            json!({"path":destination,"relativePath":name,"records":records.len(),"hasBrief":has_brief,
+                "artifactIdentity":artifact_identity,"excludedRecordCount":excluded_records.len(),"excludedRecords":excluded_records}),
         )
     }
     /// `persist: false` returns the same record shape without saving it or adding
@@ -662,11 +1028,28 @@ impl AnalysisWorkspace {
     pub fn call(engine: &QuixiEngine, tool: &str, args: Value, persist: bool) -> Result<Value> {
         // UI, MCP and agent calls alike; local paths outside the project stay allowed here.
         reject_non_local_paths(&args)?;
+        let _operation = engine.analysis.operation.lock();
         let id = Uuid::new_v4().to_string();
         let selected_target = engine.analysis.target.lock().clone();
-        let result = engine.rea.call(tool, args.clone());
-        let transport_failed = result.is_err();
-        let failed = result
+        let process_before = engine.rea.process_id();
+        let open_before = engine.analysis.open_rea_target(process_before);
+        let explicit_target = args["path"].as_str().or_else(|| args["input_path"].as_str());
+        let target_before = canonical_target(explicit_target.or(open_before.as_deref()).unwrap_or(&selected_target));
+        let identity_before = capture_artifact_identity(&target_before);
+        let uses_open_target = explicit_target.is_none() && open_before.is_some()
+            && !matches!(tool, "open_binary" | "close_binary" | "binary_session");
+        let bound_identity = engine.analysis.rea_identity.lock().as_ref()
+            .filter(|(pid, path, _)| *pid == process_before && same_target(path, &target_before))
+            .map(|(_, _, identity)| identity.clone());
+        let stale_session = uses_open_target && bound_identity.as_ref().and_then(verified_sha256)
+            .is_some_and(|bound| verified_sha256(&identity_before).as_ref() != Some(&bound));
+        let result = if stale_session {
+            Err(anyhow::anyhow!("The artifact bytes differ from the open REA session. Reopen the selected artifact before continuing."))
+        } else {
+            engine.rea.call(tool, args.clone())
+        };
+        let transport_failed = result.is_err() && !stale_session;
+        let mut failed = result
             .as_ref()
             .map(|r| r["isError"].as_bool().unwrap_or(false))
             .unwrap_or(true);
@@ -677,20 +1060,49 @@ impl AnalysisWorkspace {
             }
         };
         let evidence = quixi_mcp::rea::payload(&response);
-        let process_id = engine.rea.process_id();
-        engine.analysis.observe_provider_result(tool, &evidence, failed, transport_failed, process_id);
+        let provider_failed = failed;
         // Tools without a path act on REA's open binary, which may differ from the selection.
-        let open = engine.analysis.open_rea_target(process_id);
-        engine.analysis.observe_rea_target(tool, &args, &evidence, failed, process_id);
         let target = args["path"]
             .as_str()
             .or_else(|| args["input_path"].as_str())
             .or_else(|| evidence.pointer("/target/path").and_then(Value::as_str))
             .or_else(|| evidence.pointer("/result/path").and_then(Value::as_str))
-            .or(open.as_deref())
+            .or(open_before.as_deref())
             .unwrap_or(&selected_target);
-        let mut record = json!({"provider":"rea","kind":"static","selectedTarget":selected_target,"id":id,"tool":tool,"arguments":args,"target":canonical_target(target),
-            "created":chrono::Utc::now().to_rfc3339(),"failed":failed,"response":response});
+        let target = canonical_target(target);
+        let identity_after = capture_artifact_identity(&target);
+        let process_id = engine.rea.process_id();
+        let session_ended = process_before == 0 || process_before != process_id;
+        let mut identity = if stale_session {
+            json!({"status":"changed","kind":"file","boundSha256":bound_identity.as_ref().and_then(verified_sha256),
+                "currentSha256":verified_sha256(&identity_before),"reason":"The artifact no longer matches the open REA session"})
+        } else if !same_target(&target_before, &target) {
+            json!({"status":"unverified","kind":"unknown","reason":"The reported artifact differs from the artifact identified before the call"})
+        } else {
+            checked_analysis_identity(&identity_before, &identity_after, process_before, process_id)
+        };
+        if uses_open_target && !stale_session && bound_identity.as_ref().and_then(verified_sha256).is_none()
+            && identity["status"] == "verified" {
+            identity = json!({"status":"unverified","kind":"file","observedSha256":verified_sha256(&identity),
+                "reason":"This existing REA session was not opened with a verified artifact identity; reopen the artifact"});
+        }
+        identity = retained_result_identity(tool, identity);
+        if identity["status"] == "changed" || session_ended { failed = true; }
+        engine.analysis.observe_provider_result(tool, &evidence, failed, transport_failed || session_ended, process_id);
+        if identity["status"] == "changed" { engine.analysis.provider_sessions.lock().clear(); }
+        engine.analysis.observe_rea_target(tool, &args, &evidence, provider_failed || session_ended, process_id);
+        if tool == "open_binary" {
+            *engine.analysis.rea_identity.lock() = if !failed && verified_sha256(&identity).is_some() {
+                Some((process_id, target.clone(), identity.clone()))
+            } else { None };
+        } else if tool == "close_binary" && !failed {
+            *engine.analysis.rea_identity.lock() = None;
+        }
+        let mut record = json!({"provider":"rea","kind":"static","selectedTarget":selected_target,"id":id,"tool":tool,"arguments":args,"target":target,
+            "created":chrono::Utc::now().to_rfc3339(),"failed":failed,"response":response,"artifactIdentity":identity});
+        if record["artifactIdentity"]["status"] == "changed" {
+            record["identityError"] = json!("Artifact identity changed; this response must not be used as evidence for the current build. Reopen the artifact.");
+        }
         if persist {
             engine
                 .analysis
@@ -735,7 +1147,24 @@ impl AnalysisWorkspace {
     pub fn handle(engine: &Arc<QuixiEngine>, route: &str, body: &Value) -> Result<Value> {
         match route {
             "workflow" => engine.rea.workflow(body),
+            "settings" => {
+                let patch = runtime_settings_patch(body)?;
+                // configure can interrupt the provider; never queue it behind the
+                // analysis operation lock held by an in-flight provider call.
+                if patch.as_object().is_some_and(|object| !object.is_empty()) {
+                    let response = engine.rea.configure(&patch)?;
+                    if response["changed"] == true {
+                        *engine.analysis.rea_target.lock() = None;
+                        *engine.analysis.rea_identity.lock() = None;
+                        engine.analysis.provider_sessions.lock().clear();
+                    }
+                    Ok(response)
+                } else {
+                    Ok(engine.rea.runtime_settings())
+                }
+            }
             "connect" => {
+                let _operation = engine.analysis.operation.lock();
                 let connected = engine.rea.connect(body["mode"].as_str())?;
                 observe_session(
                     &connected["session"],
@@ -745,12 +1174,17 @@ impl AnalysisWorkspace {
                 Ok(connected)
             }
             "disconnect" => {
+                // REA's out-of-band cancellation must run before any waiting for
+                // an analysis call. Calls reject a retired process's identity.
                 engine.rea.disconnect()?;
                 *engine.analysis.rea_target.lock() = None;
+                *engine.analysis.rea_identity.lock() = None;
+                engine.analysis.provider_sessions.lock().clear();
                 Ok(json!({"connected":false}))
             }
             "inventory" => Ok(engine.analysis.inventory()),
             "select" => {
+                let _operation = engine.analysis.operation.lock();
                 let path = body["path"]
                     .as_str()
                     .filter(|s| !s.is_empty())
