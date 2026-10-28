@@ -23,6 +23,44 @@ pub struct AnalysisWorkspace {
 mod tests {
     use super::*;
     #[test]
+    fn provider_badge_requires_live_evidence_and_clears_after_failure() {
+        let analysis = AnalysisWorkspace {
+            dir: PathBuf::new(),
+            target: Mutex::new(String::new()),
+            provider_sessions: Mutex::new(HashMap::new()),
+        };
+        // Opening a target only binds a lazy provider; IDA has not answered yet.
+        analysis.observe_provider_result("open_binary", &json!({"result":{"path":"sample.exe"}}), false, 42);
+        assert!(analysis.provider_sessions.lock().is_empty());
+        let evidence = json!({"provider":{"id":"ida"},"operation":"list_procedures"});
+        analysis.observe_provider_result("list_procedures", &evidence, false, 42);
+        assert_eq!(analysis.provider_sessions.lock().get("ida"), Some(&42));
+        analysis.observe_provider_result("list_procedures", &json!({"error":{"code":"unreadable_output"}}), true, 42);
+        assert!(analysis.provider_sessions.lock().is_empty());
+        // Reading retained evidence cannot re-establish a live connection.
+        analysis.observe_provider_result("inspect_analysis_view", &evidence, false, 42);
+        assert!(analysis.provider_sessions.lock().is_empty());
+        analysis.observe_provider_result("list_procedures", &evidence, false, 43);
+        assert_eq!(analysis.provider_sessions.lock().get("ida"), Some(&43));
+        analysis.observe_provider_result("close_binary", &json!({}), false, 43);
+        assert!(analysis.provider_sessions.lock().is_empty());
+    }
+
+    #[test]
+    fn selecting_another_native_target_invalidates_the_previous_provider() {
+        let analysis = AnalysisWorkspace {
+            dir: PathBuf::new(),
+            target: Mutex::new(String::new()),
+            provider_sessions: Mutex::new(HashMap::new()),
+        };
+        let evidence = json!({"provider":{"id":"ghidra"},"operation":"procedure_pseudo_code"});
+        analysis.observe_provider_result("procedure_pseudo_code", &evidence, false, 42);
+        assert_eq!(analysis.provider_sessions.lock().get("ghidra"), Some(&42));
+        analysis.observe_provider_result("open_binary", &json!({"result":{"path":"another.exe"}}), false, 42);
+        assert!(analysis.provider_sessions.lock().is_empty());
+    }
+
+    #[test]
     fn dossier_preserves_failures_and_excludes_other_artifacts() {
         let base = std::env::temp_dir().join(format!("quixi-dossier-{}", Uuid::new_v4()));
         let original = base.join("original");
@@ -69,6 +107,26 @@ mod tests {
     }
 }
 impl AnalysisWorkspace {
+    fn observe_provider_result(&self, tool: &str, evidence: &Value, failed: bool, process_id: u32) {
+        let mut sessions = self.provider_sessions.lock();
+        if failed || matches!(tool, "open_binary" | "close_binary") {
+            sessions.clear();
+            return;
+        }
+        // open_binary is lazy. Only a provider observation from this operation
+        // confirms readiness; inspecting retained evidence is not a live check.
+        if evidence["operation"] == tool {
+            if let Some(provider) = evidence["provider"]["id"].as_str().filter(|p| matches!(*p, "ghidra" | "ida")) {
+                sessions.remove("ghidra");
+                sessions.remove("ida");
+                sessions.insert(provider.into(), process_id);
+            }
+        }
+        if tool == "inspect_android_package" {
+            sessions.insert("jadx-mcp".into(), process_id);
+        }
+    }
+
     pub fn new(data_dir: &Path) -> Self {
         let dir = data_dir.join("playground/analysis");
         let _ = fs::create_dir_all(&dir);
@@ -213,17 +271,7 @@ impl AnalysisWorkspace {
             }
         };
         let evidence = quixi_mcp::rea::payload(&response);
-        if !failed {
-            if tool=="close_binary" { engine.analysis.provider_sessions.lock().clear(); }
-            if tool=="open_binary" {
-                if let Some(provider)=args["provider_id"].as_str().filter(|p|matches!(*p,"ghidra"|"ida")) {
-                    let mut sessions=engine.analysis.provider_sessions.lock();
-                    sessions.remove("ghidra");sessions.remove("ida");
-                    sessions.insert(provider.into(),engine.rea.process_id());
-                }
-            }
-            if tool=="inspect_android_package" { engine.analysis.provider_sessions.lock().insert("jadx-mcp".into(),engine.rea.process_id()); }
-        }
+        engine.analysis.observe_provider_result(tool, &evidence, failed, engine.rea.process_id());
         let target = args["path"]
             .as_str()
             .or_else(|| args["input_path"].as_str())

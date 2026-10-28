@@ -251,7 +251,7 @@ For x64dbg, choose **Prepare bridge setup** and run the prepared command in a pr
 
 Open **Decompilation assistant · LLM4Decompile**, choose a specialist provider and **Discover models**. Select the served model, its Ref V2 or End V1.5 input profile, and enable specialist requests. Select a different **Driving agent model** to coordinate the investigation. **Prepare task for driving model** prepares an Ask task; **Request specialist suggestion** calls the specialist directly. The specialist uses raw `/completions` prompts and leaves the main provider/model selection unchanged. It does not download models. Ref expects Ghidra pseudo-code; End expects prepared assembly. Generated suggestions keep the source record, input hash, model, completion status and unverified label. Compile and test them separately. Windows compatibility is not established by LLM4Decompile's Linux x86-64/GCC benchmarks.
 
-Green **Connected** labels reflect active MCP connections, opened REA providers, or the specialist's last successful completion. They are connection state, not proof of complete analysis or correct generated code. Recheck after changing or restarting an external tool.
+Green **Connected** labels reflect active MCP connections, successful REA provider observations, or the specialist's last successful completion. Opening a binary prepares its provider; a function listing, decompilation or other provider result must succeed before its label becomes green. Closing or reopening a target, or a failed analysis check, clears the provider labels. They are connection state, not proof of complete analysis or correct generated code. Recheck after changing or restarting an external tool.
 
 ## GitHub deployment
 

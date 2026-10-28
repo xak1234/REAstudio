@@ -60,6 +60,12 @@ This connects the official MCP client to the actual app listener, checks authent
 
 To verify Classic launching separately, select an earlier installed Classic executable in MCP & Settings, open it, and check its window and independent profile. Close only the test Classic window.
 
+## Attached IDA verification
+
+Use a licensed IDA installation with a compatible MCP bridge, and open the original `quixi-fixture.exe` in IDA. REA 6.8.0's attached legacy profile supports `ida-pro-mcp` 1.4.0; a current upstream server with renamed tools is not interchangeable. Configure the bridge's stdio registration JSON through Toolchain in a dedicated REA Studio test profile. IDA 9.3 may ask to enable its built-in PyQt5 compatibility shims when the bridge first accesses pseudocode.
+
+With the test app on CDP port 9323, set `QUIXI_TEST_PLAYWRIGHT_MODULE` and `QUIXI_SMOKE_ROOT` as above, then run `node scripts/smoke-ida.cjs`. It requires actual IDA function listings, pseudocode for two fixture functions, assembly, matching target hashes and saved evidence. It verifies that merely opening a target stays unconnected, successful provider results turn the indicator green, and closing or testing a different binary clears it. The different input must fail IDA's identity check on the first provider operation. Expected: `passed: true` with record IDs and no JavaScript errors. The check closes the REA provider; it does not close the user's IDA window. Close the test app afterwards and launch the normal app without CDP overrides.
+
 ## Real model verification
 
 Model-assisted tasks are a separate manual integration check because they depend on a configured server, model capability, and possibly paid credentials. Use the README's new-file task in a dedicated fixture project and verify the actual file, exit code, and Activity events. For analysis, select the native fixture, enable REA in Ask mode, and request a schema lookup plus `inspect_pe_resources`; verify a successful REA event and an Evidence ID present in the saved response. Do not turn a model assertion into a passing test without checking the underlying operation.
