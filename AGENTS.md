@@ -1,4 +1,4 @@
-# QuixiDesk Windows development
+# REA Studio Windows development
 
 - This is the public Windows playground edition. Keep changes within the requested scope.
 - Read README.md and docs/TESTING.md before altering launch, packaging, or analysis behaviour.

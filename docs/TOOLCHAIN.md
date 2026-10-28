@@ -6,7 +6,7 @@ Open **Reverse engineering → Toolchain** to inspect the actual files found and
 | --- | --- | --- |
 | Analysis core | [REA](https://github.com/morluto/rea) | Bundled stdio MCP, live catalog, persistent sessions and evidence. |
 | Analysis core | [Ghidra](https://github.com/NationalSecurityAgency/ghidra) | Bundled headless REA provider; optional GUI launch. |
-| Analysis core | [GhidraMCP](https://github.com/LaurieWired/GhidraMCP) | Optional separate GUI extension/MCP setup, linked from Toolchain. QuixiDesk uses REA's own Ghidra bridge; it does not register this second server automatically. |
+| Analysis core | [GhidraMCP](https://github.com/LaurieWired/GhidraMCP) | Optional separate GUI extension/MCP setup, linked from Toolchain. REA Studio uses REA's own Ghidra bridge; it does not register this second server automatically. |
 | Analysis core | [ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) | Existing licensed IDA and an existing compatible registration, consumed through REA's IDA adapter. |
 | Mobile & apps | [JADX](https://github.com/skylot/jadx) | Pinned portable CLI/GUI download; REA Android calls additionally require the supported headless JADX MCP JAR. |
 | Mobile & apps | [Apktool](https://github.com/iBotPeaches/Apktool) | Pinned JAR download, launched with the bundled JDK from the terminal. |
@@ -44,11 +44,11 @@ The installer does not execute installers, add global PATH entries, register she
 
 Use upstream's installation instructions for the licensed IDA environment and `ida-pro-mcp`. Follow [REA's current IDA provider guide](https://github.com/morluto/rea/blob/main/docs/ida-provider.md) to create its compatible JSON registration. In Toolchain choose that JSON file under **IDA Pro MCP registration**, then disconnect/restart REA before selecting **IDA** as Native analysis provider and opening the original input binary. Do not select an IDB/I64 database as the original artifact.
 
-QuixiDesk passes the configured file as `REA_IDA_MCP_CONFIG` only to its REA child process. It does not install IDA, change other clients' registrations, claim an IDA Free license is equivalent, or automatically accept upstream licensing terms. Readiness and analysis are established by real REA calls, not by the presence of the JSON file.
+REA Studio passes the configured file as `REA_IDA_MCP_CONFIG` only to its REA child process. It does not install IDA, change other clients' registrations, claim an IDA Free license is equivalent, or automatically accept upstream licensing terms. Readiness and analysis are established by real REA calls, not by the presence of the JSON file.
 
 ## Android provider
 
-Installing the ordinary JADX CLI is useful independently but does not satisfy REA's headless provider contract. Install the pinned headless engine with `Install-Toolchain.ps1 -Tool jadx-mcp`, or choose an existing supported JAR under **JADX MCP JAR**. The standard portable location is discovered when the bundled REA starts. QuixiDesk passes it as `REA_JADX_MCP_JAR` to REA, with the bundled full JDK. Restart the REA connection after changing the path. Read the matching Android workflow and live tool availability before calling package/class/method analysis.
+Installing the ordinary JADX CLI is useful independently but does not satisfy REA's headless provider contract. Install the pinned headless engine with `Install-Toolchain.ps1 -Tool jadx-mcp`, or choose an existing supported JAR under **JADX MCP JAR**. The standard portable location is discovered when the bundled REA starts. REA Studio passes it as `REA_JADX_MCP_JAR` to REA, with the bundled full JDK. Restart the REA connection after changing the path. Read the matching Android workflow and live tool availability before calling package/class/method analysis.
 
 ## Runtime tools
 

@@ -1,7 +1,7 @@
 <div align="center">
 <img src="resources/rea-logo.svg" alt="REA Studio" width="220">
 
-# REA Studio
+# REA Studio V1.1
 
 **A native coding playground with an integrated REA reverse engineering workspace.**
 
