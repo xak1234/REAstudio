@@ -2,6 +2,12 @@
 
 ## 1.4.0 — 2026-10-28
 
+### Workspace usability
+- Add same-page navigation for analysis, saved evidence, investigations, reconstruction and advanced tools; collapse secondary setup and reconstruction controls by default.
+- Make Files and Task settings panels collapsible at desktop sizes with remembered preferences, and use dismissible overlays on narrow windows.
+- Keep the selected Agent model and Ask/Code mode visible beside task controls, with direct access to settings.
+- Put raw argument/schema editors behind explicit controls while retaining individual disclosures and revealing arguments required by a selected tool or validation error. Preserve technical tools, evidence and native-close protections.
+
 ### Multi-artifact investigations
 - Save named, immutable sets of local files with SHA-256 identities, scoped to the current project. Inspect each file's current, changed, missing or unavailable state and its matching, excluded, failed and model-suggestion evidence counts.
 - Export staged, version-pinned evidence bundles with original saved records, raw-record hashes, exclusion reasons and explicit modules with no evidence. Recheck every artifact before publishing; refuse changed inputs, empty overall evidence or exceeded bounds without replacing earlier bundles.

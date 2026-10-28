@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const connectAppMcp = require('./mcp-test-client.cjs');
+const {showAnalysisSection, revealDetails} = require('./ui-test-navigation.cjs');
 const {chromium} = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwright-core');
 (async()=>{
   const root=process.env.QUIXI_SMOKE_ROOT;
@@ -19,7 +20,7 @@ const {chromium} = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwrig
     const sources=await native('toolchain/sources');assert(sources.sources.some(s=>s.id==='x64dbg' && s.integration==='Live debugger connection'));
     assert(!sources.sources.some(s=>s.id==='awesome-ai' || s.id==='workflows' || s.id==='x64dbg-bridge'));
     await native('rea/select',{path:path.join(root,'quixi-fixture.exe')});
-    await page.locator('[data-view=analysis]').click();await page.locator('#analysis-source').selectOption('x64dbg');
+    await showAnalysisSection(page,'analysis-advanced-tools');await page.locator('#analysis-source').selectOption('x64dbg');
     await page.locator('#debugger-panel').waitFor();await page.locator('#debugger-toggle').click();
     await page.waitForFunction(()=>document.getElementById('debugger-toggle').textContent==='Disable connection');
     const catalog=await native('debugger/catalog');assert(catalog.tools.some(t=>t.name==='get_all_registers'));
@@ -32,7 +33,7 @@ const {chromium} = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwrig
     await page.waitForFunction(()=>!state.rea.operation && state.rea.record?.tool==='start_session',null,{timeout:110000});
     const started=await page.evaluate(()=>state.rea.record);assert.equal(started.failed,false,text(started));
     debuggerPid=Number(text(started).match(/Debugger PID: (\d+)/)?.[1]);assert(debuggerPid);
-    await page.locator('#evidence-raw').evaluate(node=>{node.open=true;});
+    await showAnalysisSection(page,'analysis-evidence');await revealDetails(page,'#rea-output');
     await page.waitForFunction(()=>{try{return JSON.parse(document.getElementById('rea-output').textContent).tool==='start_session';}catch{return false;}});
     assert.deepEqual(JSON.parse(await page.locator('#rea-output').textContent()),started);
     assert.match(started.target,/quixi-fixture\.exe$/i);console.log('Debugger check: started fixture, debugger PID '+debuggerPid);

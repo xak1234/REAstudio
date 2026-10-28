@@ -8,7 +8,7 @@
 [Download Windows release](https://github.com/xak1234/REAstudio/releases) · [Build from source](#build-from-source) · [REA workflow](#reverse-engineering-with-rea) · [Troubleshooting](#troubleshooting)
 </div>
 
-REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. Its dark playground layout keeps the project on the left, work in the centre, and model/tool settings on the right.
+REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. The workspace keeps the project, editor, evidence and task settings together, with collapsible side panels to give the current work more room.
 
 **V1.4.0 (package version 1.4.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
 
@@ -37,6 +37,14 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 | Providers | API-key providers and local/custom OpenAI-compatible endpoints; model selection and connection testing. |
 
 This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY (commands cannot read keyboard input), a full debugger UI, Git branch/push/pull operations, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
+
+### A less crowded workspace
+
+Use **Files** and **Task settings** to hide either sidebar and give the editor or evidence more room. Desktop panel choices are remembered. At narrow window sizes the panels open over the workspace; **Escape** dismisses them. The task bar keeps the selected Agent model and access mode visible and provides a shortcut back to task settings.
+
+The reverse engineering page has shortcuts to **Analyze**, **Saved evidence**, **Investigations**, **Rebuild** and **Advanced tools**. They move to sections of the same page, so changing sections keeps the selected target, evidence and drafted arguments.
+
+Start with the artifact picker, common analysis actions and guided inputs. For full technical access, use **Find a tool** and **Tool** in Analyze to browse the live catalog; open **Advanced tools** for optional bridges and runtime controls. **Expert view** exposes exact arguments and schemas; **Advanced arguments & schema** and the other individual disclosure sections remain available even when Expert view is off. Tools that need additional arguments, or invalid JSON that needs correction, reveal the relevant controls. Manual tools, saved raw responses, provider configuration, IDA/x64dbg controls, evidence export and reconstruction checks remain available.
 
 ### Multi-artifact investigations and close protection in V1.4
 
@@ -90,9 +98,9 @@ The application and installer are unsigned. The installer refuses to overwrite a
 ## First project and provider
 
 1. Click **Open project** and choose a folder you own or are working on.
-2. Click **Providers** and select the appropriate provider. For a local model server choose **Custom OpenAI-Compatible**.
+2. Click **Connections** and select the appropriate provider. For a local model server choose **Custom OpenAI-Compatible**.
 3. Enter its base URL, including `/v1` when required, and its exact model ID. Supply an API key only when the endpoint requires one.
-4. Click **Test connection**, then **Save provider**. Select the model in the right sidebar.
+4. Click **Test connection**, then **Save provider**. Select the Agent model in **Task settings**.
 5. Start with **Ask · read files**. Switch to **Code · edit & run commands** when you want the agent to make changes.
 
 Examples of local endpoint shapes:
@@ -165,9 +173,9 @@ The plugin receives its own `JAVA_HOME`, `GHIDRA_INSTALL_DIR`, and `PATH`. It do
 
 1. Open **Reverse engineering** and click **Connect REA**.
 2. Choose an EXE/DLL or a JavaScript application folder with **File…** or **Folder…**. Use a file/folder you are authorised to analyse.
-3. Use a quick action such as **Open native target**, **Imports**, **PE resources**, **.NET metadata**, or **JavaScript / Electron**. Review the real advertised JSON input schema and arguments, then click **Run analysis**. **Open native target** starts Ghidra in the background; it does not open a separate Ghidra desktop window.
+3. Use a quick action such as **Open native target**, **Imports**, **PE resources**, **.NET metadata**, or **JavaScript / Electron**. Review the guided inputs, or expand the exact JSON arguments and live schema, then click **Run analysis**. **Open native target** starts Ghidra in the background; it does not open a separate Ghidra desktop window.
 4. For native work, open the binary and click **Functions**, then **Run analysis**. A paged table shows actual retained functions; click **Decompile** beside a local function to retrieve its code. External imports are labelled separately. **Strings** provides a search field and rejects empty input before calling REA. Guided fields and the advanced JSON editor stay in sync; refreshing the catalog preserves your arguments. A successful `open_binary` call alone does not prove that deeper native analysis succeeded.
-5. Read **Evidence & recovered code**, including limitations. **Complete result** contains the entire retained MCP response. For large live views, use `inspect_analysis_view` with the returned reference to retrieve additional pages.
+5. Choose **Saved evidence** and read **Evidence & recovered code**, including limitations. **Complete result** contains the entire retained MCP response. For large live views, use `inspect_analysis_view` with the returned reference to retrieve additional pages.
 6. Use **Use in task** to supply a saved analysis record to the coding agent. **Enable analysis tools for this task** grants the agent the static-analysis subset, saved records, and the separately enabled debugger/specialist integrations. Ask mode reads debugger observations; Code mode also permits its bounded execution controls.
 7. **Export JSON** writes a saved result to a selected folder. **Close target** releases the current live target.
 

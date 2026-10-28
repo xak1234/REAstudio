@@ -63,6 +63,16 @@
   window.addEventListener('rea-native-close-cancelled', event => {
     if (request?.nonce === event.detail?.nonce) reset();
   });
+  dialog.addEventListener('keydown', event => {
+    if (event.key !== 'Tab' || !dialog.open) return;
+    const controls = [...dialog.querySelectorAll('button')].filter(node => !node.disabled && node.getClientRects().length);
+    event.preventDefault();
+    if (!controls.length) return;
+    const current = controls.indexOf(document.activeElement);
+    const next = current < 0 ? (event.shiftKey ? controls.length - 1 : 0)
+      : (current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+    controls[next].focus();
+  });
   dialog.addEventListener('cancel', event => { event.preventDefault(); reply('cancel'); });
   $('native-close-cancel').addEventListener('click', () => reply('cancel'));
   $('native-close-discard').addEventListener('click', () => reply('close'));

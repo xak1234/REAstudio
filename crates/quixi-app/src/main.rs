@@ -51,6 +51,7 @@ fn static_asset(root: &Path, path: &str) -> Response<Cow<'static, [u8]>> {
         }
         "/playground/app.js" => ("playground/app.js", "text/javascript; charset=utf-8"),
         "/playground/analysis.js" => ("playground/analysis.js", "text/javascript; charset=utf-8"),
+        "/playground/workflow.js" => ("playground/workflow.js", "text/javascript; charset=utf-8"),
         "/playground/close-guard.js" => ("playground/close-guard.js", "text/javascript; charset=utf-8"),
         "/playground/investigations.js" => ("playground/investigations.js", "text/javascript; charset=utf-8"),
         "/playground/reconstruction.js" => (

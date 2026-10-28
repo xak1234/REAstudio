@@ -12,7 +12,8 @@ param(
     [switch]$Investigations,
     [switch]$Scale,
     [switch]$ScaleRuntime,
-    [switch]$NativeClose
+    [switch]$NativeClose,
+    [switch]$Usability
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -27,6 +28,8 @@ $previousScaleReport = $env:REA_STUDIO_SCALE_REPORT
 $previousScaleRuntime = $env:REA_STUDIO_SCALE_RUNTIME
 $previousInvestigationReport = $env:REA_STUDIO_INVESTIGATION_REPORT
 $previousNativeCloseReport = $env:REA_STUDIO_NATIVE_CLOSE_REPORT
+$previousNativeClosePhase = $env:REA_STUDIO_NATIVE_CLOSE_PHASE
+$previousUsabilityReport = $env:REA_STUDIO_USABILITY_REPORT
 $previousCdp = $env:REA_STUDIO_TEST_CDP
 function Invoke-NodeCheck {
     param([string]$Name, [string[]]$Arguments, [bool]$Selected = $true, [string[]]$RequiredEnvironment = @())
@@ -64,7 +67,7 @@ try {
     Invoke-NodeCheck 'version' @('scripts/check-version.mjs')
     Invoke-NodeCheck 'analysis-contract' @('scripts/check-analysis.cjs')
     Invoke-NodeCheck 'reconstruction-contract' @('scripts/check-reconstruction.cjs')
-    $syntaxFiles = @('resources/playground/app.js','resources/playground/analysis.js','resources/playground/reconstruction.js','resources/playground/close-guard.js','resources/playground/investigations.js','scripts/fixtures/scale/generate.cjs')
+    $syntaxFiles = @('resources/playground/app.js','resources/playground/analysis.js','resources/playground/reconstruction.js','resources/playground/close-guard.js','resources/playground/investigations.js','resources/playground/workflow.js','scripts/fixtures/scale/generate.cjs')
     $syntaxFiles += @(Get-ChildItem (Join-Path $PSScriptRoot '*.cjs') -File | ForEach-Object { 'scripts/' + $_.Name })
     foreach ($file in $syntaxFiles) { Invoke-NodeCheck ('syntax-' + [IO.Path]::GetFileNameWithoutExtension($file)) @('--check', $file) }
     $uiEnvironment = @('QUIXI_TEST_PLAYWRIGHT_MODULE','QUIXI_SMOKE_ROOT','REA_STUDIO_TEST_DATA','REA_STUDIO_TEST_CDP')
@@ -94,8 +97,11 @@ try {
         Invoke-NodeCheck 'scale-runtime' @('scripts/smoke-scale.cjs','--runtime-only') $ScaleRuntime.IsPresent @('REA_STUDIO_SCALE_ROOT')
     }
     $env:REA_STUDIO_NATIVE_CLOSE_REPORT = Join-Path $out 'native-close-report.json'
+    $env:REA_STUDIO_USABILITY_REPORT = Join-Path $out 'usability-report.json'
+    Invoke-NodeCheck 'usability' @('scripts/smoke-usability.cjs') $Usability.IsPresent $uiEnvironment
     # This test owns its app processes and requires an unused CDP endpoint.
     $env:REA_STUDIO_TEST_CDP = if ($env:REA_STUDIO_NATIVE_CLOSE_CDP) { $env:REA_STUDIO_NATIVE_CLOSE_CDP } else { 'http://127.0.0.1:9326' }
+    $env:REA_STUDIO_NATIVE_CLOSE_PHASE = $null
     Invoke-NodeCheck 'native-close' @('scripts/smoke-native-close.cjs') $NativeClose.IsPresent @('QUIXI_TEST_PLAYWRIGHT_MODULE','REA_STUDIO_TEST_EXE','REA_STUDIO_TEST_RESOURCES','REA_STUDIO_TEST_DATA')
 } finally {
     Pop-Location
@@ -105,6 +111,8 @@ try {
     $env:REA_STUDIO_SCALE_RUNTIME = $previousScaleRuntime
     $env:REA_STUDIO_INVESTIGATION_REPORT = $previousInvestigationReport
     $env:REA_STUDIO_NATIVE_CLOSE_REPORT = $previousNativeCloseReport
+    $env:REA_STUDIO_NATIVE_CLOSE_PHASE = $previousNativeClosePhase
+    $env:REA_STUDIO_USABILITY_REPORT = $previousUsabilityReport
     $env:REA_STUDIO_TEST_CDP = $previousCdp
     $finished = [DateTime]::UtcNow
     $result = [ordered]@{

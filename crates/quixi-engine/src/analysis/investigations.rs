@@ -808,6 +808,9 @@ mod tests {
             ] {
                 fs::create_dir_all(base.join(part)).unwrap();
             }
+            // Production targets are canonical before evidence is saved. TEMP may use
+            // an 8.3 alias on Windows CI, so raw fixture spellings are not equivalent.
+            let base = fs::canonicalize(base).unwrap();
             let first = base.join("original-a/module-a.bin");
             let second = base.join("original-b/module-b.bin");
             fs::write(&first, b"source-known fixture A").unwrap();

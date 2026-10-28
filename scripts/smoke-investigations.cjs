@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const { version } = require('./version.cjs');
 const connectAppMcp = require('./mcp-test-client.cjs');
+const {showPanel, showAnalysisSection} = require('./ui-test-navigation.cjs');
 const { chromium } = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwright-core');
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const key = value => path.resolve(value).replace(/^\\\\\?\\/, '').replaceAll('/', '\\').toLowerCase();
@@ -63,7 +64,7 @@ async function main() {
   const project = await native('project', {path:workspace}); report.project = project.id;
   await page.reload(); await page.locator('#connection').filter({hasText:'Connected'}).waitFor();
   assert.equal(await page.title(), 'REA Studio V' + version + ' · Coding & Reverse Engineering');
-  await page.locator('#project').selectOption(project.id);
+  await showPanel(page,'explorer'); await page.locator('#project').selectOption(project.id);
   const before = await native('ida/status'); assert.equal(before.connected, false, 'IDA must start disabled in this dedicated test profile'); assert.equal(before.installed, true);
   const catalog = await native('ida/enable', {transport:'headless'}); assert.equal(catalog.connected, true); enabled = true;
   for (const name of ['lookup_funcs','decompile']) assert(catalog.tools.some(tool => tool.name === name && tool.enabled), 'Missing live IDA tool: ' + name);
@@ -87,8 +88,7 @@ async function main() {
   }
   assert.equal((await native('ida/disable')).connected, false); enabled = false;
   report.checks.push({name:'real-two-module-evidence', status:'passed', records:retained.length});
-  await page.locator('[data-view=analysis]').click();
-  await page.locator('#inv-panel').evaluate(node => {node.open = true;});
+  await showAnalysisSection(page,'inv-panel');
   const idle = () => page.waitForFunction(() => window.QuixiInvestigations && !QuixiInvestigations.busy);
   await idle();
   const waitResponse = (route, id) => page.waitForResponse(response => {
@@ -191,8 +191,8 @@ async function main() {
   report.checks.push({name:'missing-copy-export-rejected', status:'passed'});
   const restored = await inspect(); assert.equal(restored.allArtifactsCurrent, true); assert.equal(restored.readyToExport, true);
   const second = await verifyExport(await uiCall('#inv-export', 'export', snapshot.id)); assert.notEqual(first, second, 'Fresh export reused an earlier output folder');
-  await page.reload(); await page.locator('#connection').filter({hasText:'Connected'}).waitFor(); await page.locator('#project').selectOption(project.id);
-  await page.locator('[data-view=analysis]').click(); await page.locator('#inv-panel').evaluate(node => {node.open = true;});
+  await page.reload(); await page.locator('#connection').filter({hasText:'Connected'}).waitFor(); await showPanel(page,'explorer'); await page.locator('#project').selectOption(project.id);
+  await showAnalysisSection(page,'inv-panel');
   await page.locator('#inv-select option[value="' + snapshot.id + '"]').waitFor({state:'attached'});
   await page.locator('#inv-select').selectOption(snapshot.id);
   await idle();

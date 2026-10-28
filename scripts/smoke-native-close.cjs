@@ -11,6 +11,7 @@ const { promisify } = require('node:util');
 const { performance } = require('node:perf_hooks');
 const { chromium } = require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwright-core');
 const { version } = require('./version.cjs');
+const {showPanel} = require('./ui-test-navigation.cjs');
 const execute = promisify(execFile);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const psLiteral = value => "'" + String(value).replaceAll("'", "''") + "'";
@@ -214,7 +215,7 @@ async function withApp(label, task, settings) {
     }, { route, data });
     app.project = await app.pg('project', { path: projectDirectory });
     await page.reload(); await page.locator('#connection').filter({ hasText: 'Connected' }).waitFor();
-    await page.locator('#project').selectOption(app.project.id);
+    await showPanel(page,'explorer'); await page.locator('#project').selectOption(app.project.id);
     await page.locator('.file-row[title="note.txt"]').click();
     await poll(async () => (await page.locator('#editor').inputValue()) === original, 'Loaded fixture editor contents');
     await page.evaluate(() => {
@@ -288,12 +289,38 @@ async function requestDialog(app) {
     const page = app.page, buffer = 'Unsaved editor buffer survives cancellation.\n';
     await page.evaluate(nonce => window.ipc.postMessage(JSON.stringify({ type: 'rea-close-response', nonce, action: 'close' })), crypto.randomUUID());
     await delay(600); assert(isAlive(app), 'Unsolicited IPC closed the application');
-    await page.locator('#editor').fill(buffer); await requestDialog(app);
+    await page.locator('#editor').fill(buffer);
+    await page.setViewportSize({width:480,height:900}); await showPanel(page,'settings');
+    await requestDialog(app);
+    report.modalFocusTrace = [];
+    const focusSnapshot = async key => {
+      const snapshot = await page.evaluate(() => ({
+        id: document.activeElement?.id, tag: document.activeElement?.tagName,
+        inside: document.getElementById('native-close-dialog').contains(document.activeElement),
+        open: document.getElementById('native-close-dialog').open, documentFocused: document.hasFocus(),
+        overlay: document.getElementById('settings-toggle').getAttribute('aria-expanded')
+      }));
+      report.modalFocusTrace.push({ key, ...snapshot }); saveReport(); return snapshot;
+    };
+    await focusSnapshot('initial');
+    for (const key of ['Tab','Tab','Tab','Tab','Shift+Tab','Shift+Tab','Shift+Tab','Shift+Tab']) {
+      await page.keyboard.press(key);
+      const snapshot = await focusSnapshot(key);
+      assert.equal(snapshot.inside, true, 'Native-close dialog focus escaped: ' + JSON.stringify(snapshot));
+    }
+    await page.keyboard.press('Escape');
+    await page.locator('#native-close-dialog').waitFor({state:'hidden'});
+    assert.equal(await page.locator('#settings-toggle').getAttribute('aria-expanded'),'true', 'Modal Escape must leave the underlying mobile overlay open');
+    assert.equal(await page.locator('#editor').inputValue(),buffer);
+    await requestDialog(app);
     await page.evaluate(nonce => window.ipc.postMessage(JSON.stringify({ type: 'rea-close-response', nonce, action: 'close' })), crypto.randomUUID());
     await delay(600); assert(isAlive(app), 'Wrong nonce closed the application');
     const cancelledNonce = await page.evaluate(() => window.__nativeCloseSmokeRequests.at(-1).nonce);
     await page.locator('#native-close-cancel').click();
     await page.locator('#native-close-dialog').waitFor({ state: 'hidden' });
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#settings-toggle').getAttribute('aria-expanded'),'false');
+    await page.setViewportSize({width:1440,height:920});
     await page.evaluate(nonce => window.ipc.postMessage(JSON.stringify({ type: 'rea-close-response', nonce, action: 'close' })), cancelledNonce);
     await delay(600); assert(isAlive(app), 'A cancelled nonce was accepted for close');
     assert.equal(await page.locator('#editor').inputValue(), buffer);

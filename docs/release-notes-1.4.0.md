@@ -1,6 +1,9 @@
 REA Studio V1.4.0
 
-This release adds persistent investigations across related modules and protects unsaved work when the native window closes.
+This release simplifies access to analysis and task controls, adds persistent investigations across related modules, and protects unsaved work when the native window closes.
+
+- Move around the same analysis page with Analyze, Saved evidence, Investigations, Rebuild and Advanced tools shortcuts. Collapse Files and Task settings to widen the work area; desktop choices persist, and narrow-window overlays dismiss with Escape.
+- Keep the selected model and access mode visible by the task controls. Use Expert view or individual disclosures for exact JSON arguments and live schemas; optional bridges and runtime settings remain available under Advanced tools.
 
 - Capture a named set of up to 32 local files with immutable SHA-256 identities. Reopen the set later and inspect changed, missing or unavailable inputs alongside matching, excluded, failed and model-suggestion evidence counts.
 - Export a new version-pinned evidence bundle into a separate project. The manifest records each module's coverage, retained raw-record hashes and exclusion reasons; all artifacts are checked again before the staged bundle becomes final.

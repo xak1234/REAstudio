@@ -3,6 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const connectAppMcp=require('./mcp-test-client.cjs');
+const {showPanel,revealDetails,showAnalysisSection}=require('./ui-test-navigation.cjs');
 const {chromium}=require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwright-core');
 (async()=>{
   const root=process.env.QUIXI_SMOKE_ROOT;
@@ -40,12 +41,12 @@ const {chromium}=require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwright
     const status=await pg('decompile/status');assert.equal(status.connected,true);
     await page.locator('[data-view=analysis]').click();
     await page.evaluate(async id=>{await refreshState();await loadDecompileSettings();await loadAnalysisHistory();renderEvidence(await pg('rea/evidence',{id}));await refreshConnectionBadges();},original.id);
-    await page.locator('#decompile-settings').evaluate(n=>n.open=true);
+    await showAnalysisSection(page,'analysis-advanced-tools');await revealDetails(page,'#decompile-prepare');
     assert.match(await page.locator('#decompile-connection').textContent(),/^Connected/);
     // The Agent model is the driver; the helper is a tool it calls.
     assert.match(await page.locator('#helper-status').textContent(),/^On/);
-    await page.locator('#model').selectOption('custom::'+provider.selectedModel);
-    await page.locator('#decompile-prepare').click();
+    await showPanel(page,'settings');await page.locator('#model').selectOption('custom::'+provider.selectedModel);
+    await showAnalysisSection(page,'analysis-advanced-tools');await revealDetails(page,'#decompile-prepare');await page.locator('#decompile-prepare').click();
     await page.waitForFunction(()=>document.getElementById('task').value.includes('decompile_assist'));
     assert.match(await page.locator('#task').inputValue(),/decompile_assist/);
     assert.equal(await page.locator('#model').inputValue(),'custom::'+provider.selectedModel);
@@ -62,7 +63,7 @@ const {chromium}=require(process.env.QUIXI_TEST_PLAYWRIGHT_MODULE || 'playwright
       assert(final.events.some(e=>e.kind==='decompile_assist' && e.detail.failed===false),'Driving model must actually call the specialist');
       console.log('Specialist check: a separate real driving model called the specialist');
     }
-    await page.locator('[data-view=analysis]').click();await page.evaluate(()=>refreshConnectionBadges());
+    await showAnalysisSection(page,'analysis-advanced-tools');await revealDetails(page,'#decompile-settings');await page.evaluate(()=>refreshConnectionBadges());
     await page.screenshot({path:path.join(root,'decompilation-assistant.png'),fullPage:true});
     // Changing endpoint settings invalidates an earlier successful connection.
     await native('providers/save',{providerId:'custom',baseUrl:provider.baseUrl,apiKey:provider.apiKeyRaw || '',selectedModel:provider.selectedModel,completeOnboarding:true});

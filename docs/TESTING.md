@@ -8,6 +8,22 @@ Run the validation commands from the README. The focused suites cover platform/w
 
 The public source audit checks tracked files for excluded runtime/profile trees, private LAN addresses, credential-bearing URLs, and common credential patterns. It does not establish that arbitrary future changes are free of secrets or licensing issues.
 
+## Workspace usability and technical access
+
+Use the isolated interactive app and fixture environment from the native UI instructions below. Set `QUIXI_SMOKE_ROOT` to the compiled fixture folder containing `quixi-fixture.exe`, `QUIXI_TEST_PLAYWRIGHT_MODULE` to the installed Playwright module, `REA_STUDIO_TEST_DATA` to the isolated profile and `REA_STUDIO_TEST_CDP` to that app's debugging URL. Run the additional UI check against the resources intended for packaging:
+
+```powershell
+node scripts/smoke-usability.cjs
+```
+
+The script writes a JSON receipt and responsive screenshots at 1440, 1000 and 480 pixels into a new sibling test folder. Optional `REA_STUDIO_USABILITY_REPORT` chooses the receipt path. The wrapper's `-Usability` switch writes `usability-report.json` into its output directory. It checks retained controls, panel persistence and keyboard navigation, guide/rebuild/evidence access, the complete live catalog, and a real manually edited JSON `search_strings` call with saved evidence and target identity.
+
+Check both desktop and narrow-window layouts. Files and Task settings must collapse without leaving reserved space; desktop choices must survive reload, narrow panels must remain reachable and Escape must dismiss their overlays. The compact model/access control must open the corresponding task settings.
+
+Exercise each same-page shortcut: Analyze, Saved evidence, Investigations, Rebuild and Advanced tools. Selecting a quick tool, following guide actions or encountering missing/invalid arguments must reveal the required controls without clearing the current target or JSON draft. With **Expert view** off, **Advanced arguments & schema** and individual raw-argument/live-schema disclosures must remain reachable. Verify full catalog access, independent IDA bridge access, debugger/source controls, reconstruction and saved evidence; this UI check does not establish new analysis-engine capability.
+
+After changing these layouts, rerun the native UI/Ghidra, MCP, investigation and native-close suites against the final resources. Earlier receipts establish the earlier candidate only; record the new usability receipt and each rerun separately.
+
 ## Native UI and Ghidra integration
 
 From an **x64 Visual Studio Developer PowerShell**, prepare an isolated fixture and install the test driver outside the application source:
@@ -191,13 +207,19 @@ node scripts/smoke-native-close.cjs
 
 The script sends real native close requests to its own windows. It checks cancellation preserves unsaved buffers; save conflicts do not close; save/discard/clean close produce the correct disk contents; backend terminal and synchronous commands trigger warnings even without UI terminal state; and wrong, unsolicited or cancelled close identities are rejected. Suppressing the renderer acknowledgement must produce an actual native fallback with No as its default. Both No and Yes are exercised. A passing run requires normal app exits, no forced cleanup and no JavaScript errors. Its JSON receipt is saved below the fresh data root. It does not claim protection from operating-system shutdown, crashes or forced process termination.
 
-The validation wrapper accepts `-Investigations`, `-Scale`, `-ScaleRuntime` and `-NativeClose`. Each selected check requires the environment documented above; missing prerequisites fail instead of passing as skipped. `-Scale -ScaleRuntime` runs static and runtime checks together, while `-ScaleRuntime` alone executes only the fixture. It saves separate `investigation-report.json`, `scale-benchmark.json` and `native-close-report.json` receipts in its output directory. For the wrapper's owned close-test instances, use the independent `REA_STUDIO_NATIVE_CLOSE_CDP` URL (default `http://127.0.0.1:9326`); the existing app's `REA_STUDIO_TEST_CDP` is preserved.
+The validation wrapper accepts `-Usability`, `-Investigations`, `-Scale`, `-ScaleRuntime` and `-NativeClose`. Each selected check requires the environment documented above; missing prerequisites fail instead of passing as skipped. `-Scale -ScaleRuntime` runs static and runtime checks together, while `-ScaleRuntime` alone executes only the fixture. It saves separate `usability-report.json`, `investigation-report.json`, `scale-benchmark.json` and `native-close-report.json` receipts in its output directory. For the wrapper's owned close-test instances, use the independent `REA_STUDIO_NATIVE_CLOSE_CDP` URL (default `http://127.0.0.1:9326`); the existing app's `REA_STUDIO_TEST_CDP` is preserved.
 
 ```powershell
-.\scripts\run-integration-checks.ps1 -Investigations -Scale -ScaleRuntime -NativeClose
+.\scripts\run-integration-checks.ps1 -Usability -Investigations -Scale -ScaleRuntime -NativeClose
 ```
 
 ## Recorded 1.4 verification
+
+The simplified UI passed its dedicated live usability check: all 338 original controls and the complete 229-tool advertised REA catalog were retained, exact manual JSON produced real saved evidence, full descriptions remained accessible, and keyboard/persistence/navigation checks passed. Twenty layout and interaction checks at 1440, 1000 and 480 pixels included viewport visibility and hit-testing. Target-specific tool availability remains unchanged. The native-close suite passed all seven phases again in about 40.3 seconds, including narrow-layout modal focus through eight Tab steps and Escape handling with a sidebar overlay. Neither suite reported JavaScript errors or forced cleanup.
+
+The affected native UI/Ghidra, runtime/oracle controls, MCP, headless IDA, debugger, investigation and scale integrations also passed against the revised interface. The first aggregate run refused to reuse an existing investigation fixture directory; the investigation suite then passed all seven checks with a fresh directory. Its failed prerequisite receipt was retained. The scale rerun again completed 2,784 functions and all 12 runtime cases.
+
+The first 1.4 CI run exposed a test-fixture path assumption when Windows TEMP used an 8.3 alias. Production already canonicalizes evidence targets; the fixture now follows that contract. The same failure was reproduced locally with an actual short TEMP/TMP path, then all eight investigation tests passed under that path after the fixture correction. Production path matching was not relaxed. The dedicated CI investigation suite includes this fixture regression.
 
 On 2026-10-28, the coordinated Windows release-mode application, engine and workspace suites reported **100 passed, 0 failed and 2 ignored** (10 app, 74 engine and 16 workspace tests passed). The eight investigation tests and the MCP action/confirmation contract test are included. The two licensed live tests remain explicitly ignored in this run. Workspace type checking and Clippy also completed; existing upstream warnings remain.
 

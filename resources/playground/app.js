@@ -39,6 +39,7 @@ function showView(view) {
   document.querySelector('.workbench').classList.toggle('analysis-active',view==='analysis');
   document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===view)));
   document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==`view-${view}`);
+  window.QuixiWorkflow?.viewChanged(view);
   if(view==='changes' && state.project)loadDiff().catch(error);
   if(view==='analysis'){loadAnalysisHistory().catch(error);refreshAnalysisSources().catch(error);loadRuntimeSettings().catch(error);window.QuixiInvestigations?.refresh().catch(error);}
 }
@@ -149,6 +150,7 @@ function updateControls(){
   $('status').textContent=active?(waiting?'Run awaiting your approval':`Run ${active.status}`):state.project?'Workspace ready':'Open a project';$('status').classList.toggle('attention',!!waiting);
   $('mode').disabled=!!active;$('model').disabled=!!active;$('rea-enabled').disabled=!!active;$('max-steps').disabled=!!active;$('confirm-commands').disabled=!!active;
   $('received-code-open').disabled=!!active || !!state.rea.operation;
+  window.QuixiWorkflow?.updateTaskContext();
 }
 async function selectProject(id){if(state.rea.oracleOperation || window.QuixiInvestigations?.busy){$('project').value=state.project;throw new Error('Finish the current oracle or investigation operation before switching projects.');}if(!guardDirty()){$('project').value=state.project;return false;}state.project=id;localStorage.setItem('quixi.project',id);state.run='';state.file=null;state.dirty=false;state.continueFrom='';renderContinue();state.rea.oracle=null;gitView.files=null;gitView.selected='';$('reconstruction-dossier').value='';$('oracle-result').hidden=true;renderEditor();renderProjects();renderRuns();updateControls();renderTerminal();window.dispatchEvent(new Event('rea-project-changed'));await loadFiles();await loadDossiers();if(state.projects.find(p=>p.id===id)?.received)markReceivedSeen(id);return true;}
 async function loadFiles(){if(!state.project){replace('files',[el('p','Project files appear here.','empty')]);return;}
@@ -324,6 +326,8 @@ function renderTools(preferred,preserve=false){
 }
 function toolChanged(){
   const tool=state.rea.tools.find(t=>t.name===$('rea-tool').value);const availability=state.rea.availability.get(tool?.name);
+  const description=tool?.description || '', brief=description.match(/^.*?[.!?](?:\s|$)/s)?.[0].trim() || description.split('\n')[0];
+  $('rea-tool-summary').textContent=tool?(brief.length>220?brief.slice(0,217)+'…':brief):'Choose a tool to view its arguments and results.';
   $('rea-description').textContent=tool?.description || '';$('rea-schema').textContent=JSON.stringify(tool?.inputSchema || {},null,2);
   $('rea-availability').textContent=availability && !availability.available?`${availability.reason}: ${availability.remediation || 'Unavailable for this target or host.'}`:'';
   const properties=tool?.inputSchema?.properties || {},args=QuixiAnalysis.defaults(tool || {},state.rea.target,$('rea-provider').value);
@@ -346,6 +350,7 @@ function updateAnalysisControls(){
   const tool=state.rea.tools.find(t=>t.name===$('rea-tool').value),locked=!!state.rea.operation || !!state.rea.connecting || !!running();
   let issues=[];try{if(tool)issues=QuixiAnalysis.issues(tool,JSON.parse($('rea-arguments').value));}catch{issues=['Arguments must be valid JSON.'];}
   $('rea-validation').textContent=issues.join('\n');$('rea-validation').hidden=!issues.length;
+  if(issues.length && state.rea.target && !$('view-analysis').hidden && !$('rea-inputs').querySelector('input'))window.QuixiWorkflow?.reveal('rea-arguments',{scroll:false});
   $('rea-run').disabled=locked || !tool || state.rea.availability.get(tool?.name)?.available===false || !!issues.length;
   for(const id of ['rea-connect','rea-close','rea-restart','rea-runtime','rea-provider','rea-runtime-save','rea-heap','rea-startup-timeout','rea-call-timeout','artifact-file','artifact-folder','artifact-set-path','rea-tool','rea-search','rea-arguments','rea-record','history-target','history-tool'])$(id).disabled=locked;
   for(const b of document.querySelectorAll('[data-rea-tool], #rea-inputs input, [data-analysis-action]'))b.disabled=locked;
@@ -571,7 +576,9 @@ async function prepareReaTool(name){
   if(state.rea.operation || running())throw new Error('Finish the active task or analysis first.');
   if(!state.rea.connected)await connectRea();
   if(!state.rea.tools.some(t=>t.name===name))throw new Error(`This REA version does not advertise ${name}. Refresh tools or choose another supported tool.`);
-  $('rea-search').value='';renderTools(name);($('rea-inputs').querySelector('input') || $('rea-arguments')).focus();
+  $('rea-search').value='';renderTools(name);
+  const target=$('rea-inputs').querySelector('input') || ($('rea-run').disabled ? $('rea-arguments') : $('rea-run'));
+  if(window.QuixiWorkflow)window.QuixiWorkflow.reveal(target,{focus:true});else target.focus();
   $('rea-health').textContent=`${name} selected. Review the arguments, then click Run analysis. Opening a native target uses Ghidra in the background.`;
 }
 function reconstructionInput(phase){
@@ -841,7 +848,7 @@ async function runDebugger(e){
   const issues=QuixiAnalysis.issues(tool,args);if(issues.length)throw new Error(issues.join('\n'));
   await debuggerAction('call',{tool:tool.name,arguments:args});
 }
-on('analysis-source','change',async()=>{try{await selectAnalysisSource();}finally{refreshGuide(true);}});
+on('analysis-source','change',async()=>{try{await selectAnalysisSource();if(!$('external-analysis').hidden)window.QuixiWorkflow?.reveal('external-analysis',{focus:true});}finally{refreshGuide(true);}});
 on('analysis-sources-refresh','click',refreshAnalysisSources);
 on('source-open','click',()=>pg('toolchain/open',{id:$('analysis-source').value}));
 on('source-docs','click',()=>pg('toolchain/docs',{id:$('analysis-source').value}));
@@ -854,7 +861,7 @@ on('debugger-tool','change',debuggerToolChanged);
 on('debugger-form','submit',runDebugger);
 for(const b of document.querySelectorAll('[data-debugger-tool]'))b.onclick=()=>{
   if(!analysisSources.debugger.tools.some(t=>t.name===b.dataset.debuggerTool)){error(new Error('This tool is not advertised by the connected debugger.'));return;}
-  $('debugger-tool').value=b.dataset.debuggerTool;debuggerToolChanged();$('debugger-arguments').focus();
+  $('debugger-tool').value=b.dataset.debuggerTool;debuggerToolChanged();if(window.QuixiWorkflow)window.QuixiWorkflow.reveal('debugger-arguments',{focus:true});else $('debugger-arguments').focus();
 };
 // IDA Pro bridge: live status, live tool schemas, saved records shaped like debugger records.
 const ida={status:null,unsupported:false,shown:'',schemas:new Map(),seq:QuixiAnalysis.sequencer(),statusSeq:QuixiAnalysis.sequencer()};
@@ -932,7 +939,7 @@ async function idaQuick(name,intents,opts={}){
   if(tool.kind==='annotate' && !ida.status.allowAnnotations)throw new Error('Enable Allow annotations in the IDA Pro panel first.');
   const schema=await idaSchema(name),args=QuixiAnalysis.fillArgs(schema,intents);idaShowTool(name,schema,args);
   const issues=QuixiAnalysis.issues({inputSchema:schema},args);
-  if(issues.length || !Object.keys(args).length){$('ida-panel').open=true;throw new Error(`Review the ${name} arguments in the IDA Pro panel, then run it there.\n${issues.join('\n') || 'No matching field was found in its live schema.'}`);}
+  if(issues.length || !Object.keys(args).length){$('ida-panel').open=true;window.QuixiWorkflow?.reveal('ida-arguments',{focus:true});throw new Error(`Review the ${name} arguments in the IDA Pro panel, then run it there.\n${issues.join('\n') || 'No matching field was found in its live schema.'}`);}
   return idaAction('call',{tool:name,arguments:args},true,opts);
 }
 async function runIda(e){
@@ -1018,6 +1025,7 @@ async function goToStep(step){
   if(step.tool)await prepareReaTool(step.tool);
   if(step.action && guideActions[step.action]){await guideActions[step.action]();return;}
   const target=$(step.target);if(!target)return;
+  window.QuixiWorkflow?.reveal(target,{scroll:false});
   if(target.tagName==='DETAILS')target.open=true;
   for(let d=target.parentElement?.closest('details');d;d=d.parentElement?.closest('details'))d.open=true;
   if(target.closest('[hidden]') && step.target==='code-rename'){
@@ -1126,7 +1134,7 @@ on('rea-provider','change',()=>{
   $('rea-arguments').value=JSON.stringify(args,null,2);syncAnalysisInputs();
 });
 on('theme','click',()=>{const theme=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=theme;localStorage.setItem('quixi.theme',theme);});
-on('explorer-toggle','click',()=>$('explorer').classList.toggle('show'));on('settings-toggle','click',()=>$('settings').classList.toggle('show'));
+// Responsive panel toggles are owned by workflow.js.
 on('open-project','click',()=>busy($('open-project'),async()=>{if(!guardDirty())return;const project=await pg('project');if(!project.cancelled){await refreshState();await selectProject(project.id);}}));
 on('project','change',()=>selectProject($('project').value));on('refresh','click',loadFiles);let filterTimer;on('filter','input',()=>{clearTimeout(filterTimer);filterTimer=setTimeout(()=>loadFiles().catch(error),180);});
 // A new file has no hash: it stays saveable (even when empty) and the backend refuses an existing path.
