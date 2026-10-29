@@ -66,3 +66,4 @@ foreach ($component in $components) {
 & $python -m pip freeze | Set-Content (Join-Path $bridge 'installed-requirements.txt') -Encoding utf8
 [pscustomobject]@{client='0.9.2';plugin='0.8.1-ghost_fungus';debugger=$launcher.FullName;server=(Join-Path $bridge 'Scripts\x64dbg-automate-mcp.exe');components=$components} | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $bridge 'rea-install.json') -Encoding utf8
 Write-Host 'x64dbg and its bridge are ready for a connection check. Refresh installed tools in REA Studio, select x64dbg, and enable its connection. No debugger or target was started.'
+Write-Host 'The rea-unpack tool (rea-unpack.ps1 at the install root) uses this bridge to live-dump packed PEs; see the unpack-packed-binary skill.'

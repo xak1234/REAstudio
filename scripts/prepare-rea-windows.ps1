@@ -44,4 +44,15 @@ try {
     & (Join-Path $Destination 'node\node.exe') (Join-Path $Destination 'node_modules\rea-agents\scripts\rea.mjs') --version
     if ($LASTEXITCODE -ne 0) { throw 'REA launcher check failed' }
 } finally { $env:PATH = $previousPath }
+# Deploy repo-local REA skills into the vendored rea-agents package (npm ci would
+# otherwise not know about them). Tracked under resources\rea-skills.
+$localSkills = Join-Path $PSScriptRoot '..\resources\rea-skills'
+if (Test-Path $localSkills) {
+    $skillsTarget = Join-Path $Destination 'node_modules\rea-agents\skills'
+    New-Item $skillsTarget -ItemType Directory -Force | Out-Null
+    foreach ($skill in Get-ChildItem -LiteralPath $localSkills -Directory) {
+        Copy-Item -LiteralPath $skill.FullName -Destination $skillsTarget -Recurse -Force
+    }
+    Write-Host "Deployed local REA skills: $((Get-ChildItem -LiteralPath $localSkills -Directory).Name -join ', ')"
+}
 Write-Host "REA prepared at $Destination. No system Java or MCP registrations were changed."
