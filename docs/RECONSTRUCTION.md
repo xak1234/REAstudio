@@ -2,6 +2,19 @@
 
 The original application is the analysis input. The destination project is a separate folder. Treat rebuilding a whole application as a sequence of testable features, not one unbounded request.
 
+This workflow produces new source from a reviewed behavioural specification and
+checks the resulting program against declared expectations. Static analysis
+supplies evidence for that specification. The separate [PE import repair
+workflow](IMPORT-REPAIR.md) preserves captured original machine code while
+rebuilding import metadata and writing a reviewed entry point; its output needs
+its own execution checks.
+
+**Validation boundary in 1.5.0:** the recorded analysis and import-repair tests
+cover specific fixtures and behaviours. A complete working source reconstruction
+of a representative medium native application has not been demonstrated. The
+whole-application option organises staged work; passing oracle cases establishes
+only their declared coverage. See [recorded verification](TESTING.md).
+
 ## 1. Analyse and specify
 
 Select the artifact, choose a feature or whole-application scope, and add known behaviour in Reverse engineering. **Prepare analysis** creates an Ask task with REA enabled. It can read the matching packaged REA workflows through `rea_workflow`, inspect the live schemas and availability, and gather actual static evidence.

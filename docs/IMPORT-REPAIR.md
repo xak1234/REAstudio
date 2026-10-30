@@ -7,9 +7,10 @@ import table simply because a disassembler finds more functions.
 
 ## Requirements and entry points
 
-Offline reconstruction uses Python 3.10+ and the standard library. Live capture
-uses the optional x64dbg Automate bridge installed by `Install-X64dbg-Bridge.ps1`.
-Use the bridge's Python interpreter for live work. An EXE is executed under a
+Offline import reconstruction uses Python 3.10+ and the standard library. Live
+capture uses the optional x64dbg Automate bridge installed by
+`Install-X64dbg-Bridge.ps1`. The verified live configuration uses Python 3.12;
+use the bridge's Python interpreter for live work. An EXE is executed under a
 dedicated x32dbg or x64dbg session, and `-Trusted`/`--trusted` is required.
 Do not execute a target unless that execution is already authorized.
 
@@ -40,7 +41,9 @@ not need administrator access or a running debugger.
 ## Capture an entry point and import evidence
 
 The driver asks x64dbg for the actual main-module base. It does not assume that
-the preferred `ImageBase` was used. Supply **one** of:
+the preferred `ImageBase` was used. For a reviewed entry point, supply either
+`-OepRva` or `-OepVa`, never both. The remaining options select IAT ranges, DLL
+aliases, or analysis-only capture.
 
 | PowerShell | Python | Meaning |
 | --- | --- | --- |
@@ -141,7 +144,7 @@ their raw file pointers remapped where the payload is available.
 | IAT layout | Each DLL run needs an existing null terminator; no unsafe relocation of referenced slots |
 | Header space | A new section header needs unused space; occupied padding is rejected |
 | Multiple IAT sections | Unsupported for this writer; report the boundary rather than widening unrelated page protections |
-| Relocations | Preserve structurally valid captured records; do not invent missing relocations or claim ASLR support |
+| Relocations | Preserve structurally valid captured records; reject records overlapping rewritten IAT slots or their terminators. Do not invent missing relocations or claim ASLR support |
 | TLS and Load Config | Preserve captured data when available and report that initialization/security semantics were not reconstructed |
 | Delay imports | Report separately; do not silently convert them into eager imports |
 | Debug/certificate overlays | File-only content may be absent from memory and cannot be recovered from the snapshot |

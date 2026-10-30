@@ -2,6 +2,12 @@
 
 The source repository and portable application are separate artifacts. Keep runtimes, user profiles, private projects, credentials, and analysis records out of Git. Release assets carry the built runtime bundle.
 
+A push to `main` updates the source and documentation and starts the Windows
+build workflow. It does not publish a portable application release. The source
+version may be ahead of the latest published ZIP; installation instructions
+must direct users to assets that actually appear on the Releases page. The
+tagging and package checks below apply when publishing that portable release.
+
 ## Maintainer procedure
 
 1. Every delivered update needs a new version, including fixes and documentation corrections. Run `node scripts/bump-version.mjs patch`, or choose `minor`/`major` for the corresponding release. The helper updates Cargo.toml, workspace entries in Cargo.lock and current download/documentation references. Add the new CHANGELOG.md entry and matching release notes, then run `node scripts/check-version.mjs`. CI rejects a main-branch or pull-request update whose version has not increased. Window, HTML and MCP labels come from the compiled package version. Keep `rust-toolchain.toml`, REA's package.json/package-lock.json, plugin.json, and runtime checksums consistent when changing dependencies.

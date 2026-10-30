@@ -34,14 +34,39 @@ import-repair label. Source files and existing outputs are preserved.
   count does not establish the true entry point or complete decompression.
 - A structurally repaired PE is not automatically a verified executable or a
   complete clone. Runtime and portability status stay unverified until tested.
+- Import repair preserves captured original machine code. The separate
+  SPEC → implementation → oracle workflow supports staged source rebuilding,
+  but a complete working source reconstruction of a representative medium
+  application has not been demonstrated.
 
 ## Validation
 
-The update includes byte-format regression tests, Python lint/type checks and
-a separate Windows harness that compiles owned x86/x64 fixtures, captures them
-through x64dbg, independently checks imports/resources/OEP, and runs the rebuilt
-programs. Execution results belong to each saved receipt; the existence of a
-test script is not itself a successful test result.
+The following checks completed on Windows on 2026-10-30 against the 1.5.0
+implementation:
+
+- Python 3.12: **57 tests passed**, with no failures or skips; Ruff and strict
+  mypy checks passed.
+- Rust workspace checking, Clippy and the release build completed. The focused
+  suites passed **22 MCP tests** with one ignored, and **10 application tests**.
+  Existing unrelated Clippy warnings remain.
+- Owned fixed-base x86 and x64 fixtures passed independent import-slot/name,
+  entry-point, resource and unchanged-input checks. Original and rebuilt
+  programs exited zero and printed exactly `REA_IAT_OK=42` followed by CRLF.
+- The x64 capture correctly required review for equal-address export aliases.
+  The harness used the fixture's original import identity to choose a recorded
+  candidate, then passed the offline PowerShell launcher in the packaged layout.
+- The native UI/Ghidra smoke check and import-repair guide check passed without
+  JavaScript errors. Source/version checks and the public-source audit passed.
+
+See [the recorded verification ledger](TESTING.md#recorded-15-verification) for
+the implementation revision and exact scope. These results do not establish
+arbitrary packed-app recovery, missing relocation/TLS/Load Config restoration,
+cross-machine portability or whole-application source equivalence. A complete
+portable ZIP and its extracted copy were not part of this local validation.
+
+Source and portable downloads are published separately. Use the assets listed
+on [GitHub Releases](https://github.com/xak1234/REAstudio/releases), or build the
+1.5.0 source if a matching published ZIP is not yet available.
 
 The app version is 1.5.0. Existing profiles and model/provider settings use the
 same locations as 1.4.0. No external model, Java installation, or other client's

@@ -39,6 +39,18 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 
 This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY (commands cannot read keyboard input), a full debugger UI, Git branch/push/pull operations, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
 
+### Analysis and reconstruction coverage
+
+| Workflow | Verified scope and current limit |
+| --- | --- |
+| Native application analysis | Functions, selected decompilation, strings, imports, references and saved evidence are available for supported targets. The recorded 2,784-function synthetic fixture establishes bounded inventory paging and selected discovery checks; it does not establish complete understanding of an arbitrary medium application. |
+| Repair a captured executable | Version 1.5.0 can rebuild reviewed import metadata and the entry point while preserving captured original machine code. Owned fixed-base x86 and x64 fixtures passed independent structure and execution checks. Each real target still needs its own validation. |
+| Build a replacement from source | The SPEC → implementation → oracle workflow supports staged reconstruction. A complete working source rebuild of a representative medium application has **not been demonstrated**. Passing declared cases establishes only those cases. |
+
+See the [1.5.0 release notes](docs/release-notes-1.5.0.md) and
+[recorded verification](docs/TESTING.md#recorded-15-verification) for the checks
+actually run and the remaining coverage gaps.
+
 ### A less crowded workspace
 
 Use **Files** and **Task settings** to hide either sidebar and give the editor or evidence more room. Desktop panel choices are remembered. At narrow window sizes the panels open over the workspace; **Escape** dismisses them. The task bar keeps the selected Agent model and access mode visible and provides a shortcut back to task settings.
@@ -79,8 +91,13 @@ No global Node, Java, Ghidra, npm, Rust, or administrator installation is needed
 
 ## Install and run
 
-1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.5.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
-2. Verify the ZIP in PowerShell:
+Source updates and Windows downloads are published separately. This repository
+contains version 1.5.0; a matching portable ZIP is available only when its release
+and assets appear on the Releases page. If that version is not listed, use a
+published release or [build 1.5.0 from source](#build-from-source).
+
+1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and choose a published release. Download its versioned Windows ZIP and matching `.sha256` file. For 1.5.0 these are `REA-Studio-1.5.0-x64.zip` and `REA-Studio-1.5.0-x64.zip.sha256`. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
+2. Verify the ZIP in PowerShell, setting `$archive` to the version you actually downloaded:
 
    ```powershell
    $archive = '.\REA-Studio-1.5.0-x64.zip'
@@ -327,7 +344,7 @@ With a licensed IDA Pro 9.x (idalib included) and Python 3.11+, click **Prepare 
 
 The guided panel shows which of these steps are still needed for the selected target.
 
-For x64dbg, choose **Prepare bridge setup** and run the prepared command in a project terminal. Python 3.10+ is required. The installer keeps its Python environment and plugins app-local. Enable the connection, then explicitly start the selected EXE/DLL or connect an existing debugger PID. Read registers/memory/disassembly and control breakpoints/stepping through the live schema. Disabling leaves the debugger open. See [toolchain details](docs/TOOLCHAIN.md).
+For x64dbg, choose **Prepare bridge setup** and run the prepared command in a project terminal. Use Python 3.12 for the tested live-bridge configuration; the offline import-rebuild modules separately support Python 3.10+. The installer keeps its Python environment and plugins app-local. Enable the connection, then explicitly start the selected EXE/DLL or connect an existing debugger PID. Read registers/memory/disassembly and control breakpoints/stepping through the live schema. Disabling leaves the debugger open. See [toolchain details](docs/TOOLCHAIN.md).
 
 ### Models: how they fit together
 

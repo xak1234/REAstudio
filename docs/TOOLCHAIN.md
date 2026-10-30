@@ -21,6 +21,7 @@ Open **Reverse engineering → Toolchain** to inspect the actual files found and
 | Network & runtime | [Rizin](https://github.com/rizinorg/rizin) | Pinned Windows CLI download. |
 | Network & runtime | [RAD Debugger](https://github.com/EpicGames/raddebugger) | Pinned optional alpha Windows debugger download. |
 | Rebuild & verify | REA workflows | Matching instructions/references ship inside rea-agents; read them in Toolchain or via the agent's `rea_workflow` action. |
+| Rebuild & verify | [Packed PE import repair](IMPORT-REPAIR.md) | Bundled `rea-unpack.ps1` launcher for authorized live capture and reviewed IAT/OEP repair; offline plans use saved capture evidence. The optional x64dbg bridge supplies live access. |
 | Rebuild & verify | [AI RE catalog](https://github.com/zhuyansen/awesome-ai-reverse-engineering), [RE catalog](https://github.com/morluto/awesome-reverse-engineering) | Reference links, not executable engines or a security guarantee. |
 | Rebuild & verify | SPEC and oracles | Built-in specification export, real command/output comparison, saved reports and bounded retry tasks. See [RECONSTRUCTION.md](RECONSTRUCTION.md). |
 
@@ -94,10 +95,21 @@ Frida, debuggers and traffic proxies serve different jobs. Configure and invoke 
 
 The source selector is generated from actual configured/portable/PATH tool files. Reference catalogs and workflow files are excluded. Installed standalone tools (including ILSpy, dnSpyEx, ImHex, radare2, Rizin, RAD Debugger, Frida, angr, Apktool and ordinary JADX) can supply exported text reports. This does not imply an automation API for each GUI. Imports preserve SHA-256, file path, timestamp and an explicit unverified user association with the selected artifact. Imported reports, static REA evidence and live x64dbg observations remain distinct in the shared history and reconstruction dossier.
 
-Run `scripts/install-x64dbg-bridge.ps1 -PythonExecutable <python.exe>` from source, or `Install-X64dbg-Bridge.ps1` in a packaged release. It uses the pinned x64dbg download, Automate plugin 0.8.1-ghost_fungus (both architectures, verified hashes), and Python client `x64dbg_automate[mcp]==0.9.2` in its own environment. The installed dependency versions are recorded. Existing different plugin files are preserved. No global Python package, PATH or MCP registration is changed. Choose the generated `x64dbg-automate-mcp.exe` in Toolchain if using another destination.
+Run `scripts/install-x64dbg-bridge.ps1 -PythonExecutable <python.exe>` from source, or `Install-X64dbg-Bridge.ps1` in a packaged release. Use Python 3.12 for the verified live configuration. It uses the pinned x64dbg download, Automate plugin 0.8.1-ghost_fungus (both architectures, verified hashes), and Python client `x64dbg_automate[mcp]==0.9.2` in its own environment. The installed dependency versions are recorded. Existing different plugin files are preserved. No global Python package, PATH or MCP registration is changed. Choose the generated `x64dbg-automate-mcp.exe` in Toolchain if using another destination.
 
 The bridge starts disabled on every app launch. Enabling discovers actual MCP schemas without starting the target. **Start selected target** executes the selected EXE/DLL under x64dbg; **Connect selected session** takes the debugger PID, not an arbitrary target PID. A preexisting debugger can attach to an application through its own UI. Each data/control call checks the actual debuggee process path against the selected artifact. A debugger session with another target cannot silently contribute data to this artifact.
 
 Ask tasks can read status, registers, bounded memory, memory maps, disassembly, symbols, annotations and breakpoints. Code tasks and external authenticated MCP agents can also pause/resume, step and manage breakpoints. Session selection, enablement, raw commands, remote connections and arbitrary patching are not exposed in this bridge's agent tools. Existing Code shell access retains its documented Windows-user permissions. Disabling or closing REA Studio leaves the debugger and debuggee open; accepted operations may finish. Timed-out operations are not automatically retried because their effects may already have occurred.
 
 Green Connected labels show the bridge connection and identify opened native providers. A selected debugger session is a separate status; no-debuggee/error responses remain failures. Model suggestions have a separate last-success connection indicator and never count as runtime observations.
+
+### Packed PE capture and import repair
+
+Open **Toolchain → Bundled REA workflows → Packed PE & import repair** for the
+1.5.0 procedure. Run `rea-unpack.ps1` from the installed application root, or
+`scripts/rea-unpack/rea-unpack.ps1` from source. Live capture starts its own
+dedicated x32dbg/x64dbg session using the optional bridge; the desktop bridge's
+selected session is independent. Supply a reviewed OEP and IAT ranges, or save
+an analysis capture for review. Offline `-RebuildPlan` uses Python 3.10+ and
+saved evidence without starting a debugger. Read [IMPORT-REPAIR.md](IMPORT-REPAIR.md)
+for prerequisites, commands, reports and structural/runtime limitations.

@@ -14,6 +14,7 @@
 - Detach the owned debugger client after failed shutdown or an exited debugger so its event thread cannot keep the capture process alive.
 - Package all reconstruction modules and refresh the bundled unpacking instructions even when dependency downloads are skipped. Make that guide available in the Toolchain workflow selector.
 - Add format-fixture regression tests, pinned Python lint/type validation, and a real Windows x86/x64 compiler/debugger/loader test using owned fixtures. Runtime receipts establish those fixtures only, not arbitrary packed application recovery.
+- Record the completed Windows validation and distinguish native analysis, repaired original machine code, and staged source reconstruction throughout the guides. See [the 1.5 verification ledger](docs/TESTING.md#recorded-15-verification); whole-application source reconstruction remains unproven.
 
 ## 1.4.0 — 2026-10-28
 

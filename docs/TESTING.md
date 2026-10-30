@@ -260,6 +260,39 @@ The validation wrapper accepts `-Usability`, `-Investigations`, `-Scale`, `-Scal
 .\scripts\run-integration-checks.ps1 -Usability -Investigations -Scale -ScaleRuntime -NativeClose
 ```
 
+## Recorded 1.5 verification
+
+On 2026-10-30, the 1.5.0 implementation at commit
+[`5f75306`](https://github.com/xak1234/REAstudio/commit/5f753068895bce7d20cf8fbe9837977fc7290949)
+completed the following checks on Windows. Subsequent publication edits updated
+documentation only. These are observed local results; the CI workflow and the
+older 1.4 results below are separate records.
+
+| Check | Observed result |
+| --- | --- |
+| Import-repair Python suite | Python 3.12: **57 passed, 0 failed, 0 skipped**. Ruff and strict mypy passed. The suite includes PE32/PE32+ parsing, named/ordinal imports, OEP writes, alias/forwarder handling, WOW64 address bounds, relocation/IAT overlap refusal, capture-plan integrity and owned-process cleanup. |
+| Rust compiler, lint and build | `cargo check --workspace --all-targets --locked`, `cargo clippy --workspace --all-targets --locked` and `cargo build --release --workspace --locked` completed successfully. Existing unrelated Clippy warnings remain. |
+| Focused Rust tests | Release-mode `quixi-mcp`: **22 passed, 0 failed, 1 ignored**. `quixi-app`: **10 passed, 0 failed, 0 ignored**. The ignored test was not executed. |
+| Live x86 import repair | Owned MSVC fixed-base fixture captured and rebuilt through x32dbg. Independent checks verified import identities and original slot RVAs, entry RVA, resource bytes and unchanged original SHA-256. Original and rebuilt processes both exited 0 with exactly `REA_IAT_OK=42\r\n` and empty stderr. |
+| Live x64 capture and reviewed offline repair | Capture correctly returned review-required for equal-address aliases. The harness selected the fixture's independently known original identity from the recorded candidates, then successfully rebuilt through the offline PowerShell launcher in a packaged directory layout containing spaces. The same independent structure and actual process checks passed as for x86. |
+| Native UI and bundled Ghidra | Real function inventory paging and decompilation, JavaScript analysis, saved-evidence reload and separate dossier export passed. An empty oracle remained unverified; a deliberately failing addition case was repaired and passed with retry handoff. The live REA catalog advertised 229 tools; no JavaScript errors were reported. |
+| Import-repair workflow guide | The rebuilt 1.5.0 app displayed the new Toolchain guide with the correct version. Guide lookup worked and a traversal request was rejected; no JavaScript errors were reported. |
+| Source checks | Version consistency, JavaScript syntax, analysis and reconstruction interface checks, the public-source audit and Git whitespace checks passed. |
+
+The live harness used the installed x64dbg Automate plugin 0.8.1 and Python
+client 0.9.2 with Python 3.12. Its runtime verdict is in an independent test
+receipt; the production repair report correctly leaves `runtime_verified` and
+`portable_verified` false. Same-address alias review in the fixture does not
+permit arbitrary symbol guessing for other targets.
+
+This validation covers the application build and packaged launcher layout. It
+does not include a complete distributable ZIP/extracted-copy test, an external
+medium PECompact application, general packer recovery, ASLR, missing TLS or
+Load Config reconstruction, or cross-machine portability. No complete working
+source reconstruction of a representative medium application was demonstrated.
+The older 2,784-function fixture below remains evidence of bounded inventory
+paging and selected discovery checks, not whole-application equivalence.
+
 ## Recorded 1.4 verification
 
 The simplified UI passed its dedicated live usability check: all 338 original controls and the complete 229-tool advertised REA catalog were retained, exact manual JSON produced real saved evidence, full descriptions remained accessible, and keyboard/persistence/navigation checks passed. Twenty layout and interaction checks at 1440, 1000 and 480 pixels included viewport visibility and hit-testing. Target-specific tool availability remains unchanged. The native-close suite passed all seven phases again in about 40.3 seconds, including narrow-layout modal focus through eight Tab steps and Escape handling with a sidebar overlay. Neither suite reported JavaScript errors or forced cleanup.
