@@ -687,13 +687,17 @@ impl ReaPlugin {
             "references/javascript-applications.md",
             "references/native-and-artifacts.md",
             "references/runtime-observation.md",
+            "unpack-packed-binary/SKILL.md",
         ];
         if !guides.contains(&name) {
             bail!("Choose a bundled REA workflow from the returned guide list");
         }
-        let root = self
-            .root
-            .join("node_modules/rea-agents/skills/reverse-engineer-anything");
+        let studio_guide = name == "unpack-packed-binary/SKILL.md";
+        let root = self.root.join(if studio_guide {
+            "node_modules/rea-agents/skills"
+        } else {
+            "node_modules/rea-agents/skills/reverse-engineer-anything"
+        });
         let text = String::from_utf8(quixi_platform::SafeFs::read_file_beneath(
             &root,
             Path::new(name),
@@ -702,7 +706,8 @@ impl ReaPlugin {
         let limit = request["limit"].as_u64().unwrap_or(12_000).clamp(1, 16_000) as usize;
         let total = text.chars().count();
         Ok(
-            json!({"package":"rea-agents","version":"6.8.0","path":name,"guides":guides,
+            json!({"package":if studio_guide {"rea-studio"} else {"rea-agents"},
+            "version":if studio_guide {env!("CARGO_PKG_VERSION")} else {"6.8.0"},"path":name,"guides":guides,
             "content":text.chars().skip(offset).take(limit).collect::<String>(),"totalCharacters":total,
             "nextOffset":offset.saturating_add(limit).min(total),"partial":offset>0||total>limit,
             "note":"These are the bundled version's workflows. The connected runtime's live tool schemas and availability take precedence."}),
@@ -1017,6 +1022,22 @@ mod tests {
             std::env::temp_dir().join(format!("rea-settings-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn studio_import_workflow_uses_its_own_version_and_keeps_the_path_allowlist() {
+        let root = settings_directory();
+        let guide = root.join("plugins/rea/node_modules/rea-agents/skills/unpack-packed-binary/SKILL.md");
+        std::fs::create_dir_all(guide.parent().unwrap()).unwrap();
+        std::fs::write(&guide, "Capture evidence; review imports before rebuilding.").unwrap();
+        let plugin = ReaPlugin::with_preferences(&root, root.join("rea-plugin.json"));
+        let result = plugin.workflow(&json!({"path":"unpack-packed-binary/SKILL.md"})).unwrap();
+        assert_eq!(result["package"], "rea-studio");
+        assert_eq!(result["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(result["content"], "Capture evidence; review imports before rebuilding.");
+        assert!(plugin.workflow(&json!({"path":"../unpack-packed-binary/SKILL.md"})).is_err());
+        assert!(plugin.workflow(&json!({"path":"unpack-packed-binary/other.md"})).is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

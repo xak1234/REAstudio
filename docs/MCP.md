@@ -60,7 +60,7 @@ The effective input limit is the smaller of the requested byte budget and config
 Runs save working notes, bounded recent action summaries and pending-action state in `checkpoint`. After an interrupted run, start a follow-up using `parentRun`; it receives those notes and must inspect actual files/runtime state before continuing. A pending action may already have taken effect. Checkpoints never replay commands automatically.
 ## Minimal local client check
 
-Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.4.0`, twenty-eight tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
+Enable the server and use its connection config in a Streamable HTTP client. Initialize, list tools, and call `studio_state` with `{}`. Expected: server identity `rea-studio`, version `1.5.0`, twenty-eight tools, and the actual current projects. Disable the server; new connections should fail. The development check `scripts/smoke-mcp.cjs` exercises this using the official TypeScript MCP client and real temporary project files.
 
 ## Receive code from an agent
 

@@ -4,6 +4,53 @@ Use Windows x64 with WebView2, Git, Rust 1.98.0, and Visual Studio C++ Build Too
 
 ## Compiler, lint, and focused tests
 
+### PE import reconstruction (1.5)
+
+The offline Python modules require Python 3.10+. Install the pinned validation
+tools in an isolated development environment, then run from the checkout:
+
+```powershell
+python -m pip install -r scripts\rea-unpack\requirements-dev.txt
+python -m ruff check scripts\rea-unpack
+python -m mypy --config-file scripts\rea-unpack\pyproject.toml scripts\rea-unpack
+python -m unittest discover -s scripts\rea-unpack\tests -p "test_*.py" -v
+```
+
+These tests use format-valid byte images for PE32/PE32+, name and ordinal
+imports, forwarded/duplicate exports, WOW64 architecture separation and address
+bounds, OEP rewriting, section/resources, malformed bounds, capture-plan
+integrity and cleanup restricted to the owned process.
+They do not replace a real loader or debugger test.
+
+For that separate test, supply the installed optional bridge to:
+
+```powershell
+.\scripts\test-rea-unpack-windows.ps1 `
+  -BridgePython .\resources\toolchain\x64dbg-bridge\Scripts\python.exe `
+  -X64dbgRoot .\resources\toolchain\x64dbg
+```
+
+Run on an interactive Windows account with Visual Studio C++ x86/x64 Build
+Tools and Windows SDK. The harness creates a new temporary directory, compiles
+its own C/RC fixtures with `/W4 /WX`, captures them through the actual installed
+debugger, and runs only those owned original/rebuilt fixtures. An independent
+PE reader verifies exact slot RVAs/names, OEP, resource bytes and input hashes;
+actual process execution must return exit 0 and exactly `REA_IAT_OK=42` plus
+CRLF for both architectures. Read the saved `receipt.json` and per-step logs.
+When the live capture finds same-address aliases, the harness selects only
+recorded candidates matching its independently read original fixture imports
+and rebuilds through the offline PowerShell launcher. That fixture-specific
+review does not permit the production resolver to guess ambiguous names.
+No mocked target/model or external application's behavior counts as this test.
+
+Missing prerequisites or requested lanes fail. The optional Windows
+self-process module-enumeration unit check is skipped on non-Windows hosts and
+must be identified separately. These fixed-base fixtures do not establish
+general packer recovery, ASLR, TLS/Load Config reconstruction or whole-app
+equivalence. See [IMPORT-REPAIR.md](IMPORT-REPAIR.md) for operation semantics.
+
+### Existing workspace suites
+
 Run the validation commands from the README. The focused suites cover platform/workspace behaviour and engine tests for write conflicts, interrupted runs, project-scoped task pagination, dossier isolation/preservation of failed records, implementation reads excluding raw dossier evidence, real oracle mismatches/empty coverage/truncated output, HTTP error/empty-stream handling and environment credential precedence. App tests cover MCP authentication/origin checks and tool contracts. The provider regression check uses a bounded local HTTP fixture; it is not a real model test. Further focused tests cover: the PowerShell wrapper on every installed shell (PowerShell 7 and Windows PowerShell 5.1: trailing comments, here-strings, a stale `$LASTEXITCODE` from an earlier statement, last-statement exit codes), head+tail output bounding, deep/gitignored/truncated file listings outside Git, `git status -z` parsing, the Git panel (stage, unstage, discard, commit without running repository hooks) in a temporary repository, streaming Terminal jobs (interleaved streams, Stop, per-project limit, working directory carried over inside the project and reset outside it), atomic `SafeFs` writes, CRLF/BOM detection and preservation, run change sets (pre-image snapshots in application data, diffs, conflict detection, revert and forced revert), the risky-command classifier with positive and negative cases, approve/deny/stop while a command awaits approval, follow-up task summaries, provider saving without a resolvable credential and local detection against a configured URL. `node scripts/check-analysis.cjs` checks guided inputs, live-schema preflight, retained paging and function selection. Its oracle-preview fixture matches the backend's nested `expected` schema and verifies disclosure of exact text, SHA-256, JSON null, absent files and timeouts; it does not execute those cases. `node scripts/check-reconstruction.cjs` checks target separation, eligible nonempty briefs, handoff and parser-error guidance.
 
 The public source audit checks tracked files for excluded runtime/profile trees, private LAN addresses, credential-bearing URLs, and common credential patterns. It does not establish that arbitrary future changes are free of secrets or licensing issues.

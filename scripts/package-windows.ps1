@@ -57,11 +57,18 @@ try {
     Copy-Item -LiteralPath scripts\install-toolchain.ps1 -Destination (Join-Path $output 'Install-Toolchain.ps1')
     Copy-Item -LiteralPath scripts\install-x64dbg-bridge.ps1 -Destination (Join-Path $output 'Install-X64dbg-Bridge.ps1')
     Copy-Item -LiteralPath scripts\install-ida-bridge.ps1 -Destination (Join-Path $output 'Install-IDA-Bridge.ps1')
-    # rea-unpack: reusable live-dump unpacker for packed PEs (self-elevating launcher at package root).
+    # Keep the launcher and all import reconstruction modules together.
     Copy-Item -LiteralPath scripts\rea-unpack\rea-unpack.ps1 -Destination (Join-Path $output 'rea-unpack.ps1')
     $unpackTool = Join-Path $resources 'toolchain\rea-unpack'
     New-Item $unpackTool -ItemType Directory -Force | Out-Null
-    Copy-Item -LiteralPath scripts\rea-unpack\unpack.py,scripts\rea-unpack\rea-unpack.ps1 -Destination $unpackTool
+    Get-ChildItem -LiteralPath scripts\rea-unpack -File | Where-Object { $_.Extension -in @('.py', '.ps1') } | Copy-Item -Destination $unpackTool
+    # Refresh local workflow instructions even when dependency preparation was skipped.
+    $skillsTarget = Join-Path $resources 'plugins\rea\node_modules\rea-agents\skills'
+    foreach ($skill in Get-ChildItem -LiteralPath resources\rea-skills -Directory) {
+        $skillTarget = Join-Path $skillsTarget $skill.Name
+        New-Item $skillTarget -ItemType Directory -Force | Out-Null
+        Get-ChildItem -LiteralPath $skill.FullName -Force | Copy-Item -Destination $skillTarget -Recurse -Force
+    }
     $source = Join-Path $output 'third-party-source'
     New-Item $source -ItemType Directory -Force | Out-Null
     Move-Item (Join-Path $resources 'plugins\rea\sources\*') $source

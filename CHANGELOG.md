@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.0 — 2026-10-30
+
+### PE import reconstruction
+- Replace the raw-memory-only unpacker with a two-stage capture and reviewed import-rebuild workflow. Keep original IAT slot RVAs; emit DLL descriptors, lookup tables and named/ordinal thunks in a new `.reaiat` section for PE32 and PE32+.
+- Resolve exact exports from the paused process, retaining module/process identity, hashes, forwarders, aliases and unresolved or ambiguous slots. Keep 32-bit and 64-bit forwarder identities separate in WOW64 captures; exclude unaddressable native modules and validate read ranges before calling the 32-bit bridge.
+- Use the actual loaded image base and explicit OEP VA/RVA inputs. Heuristic prologues remain candidates; unreviewed entry points/ranges and incomplete captures cannot report a completed import rebuild.
+- Save hashed memory/capture evidence and a review plan for offline reconstruction. Reject mismatched hashes, incomplete slot selections, unsupported layouts and attempts to overwrite source/evidence files.
+- Correct PE section/file alignment and entry-point writes. Preserve captured resources, report relocation/TLS/Load Config/delay-import limitations, and distinguish structural validation from successful execution or portability.
+
+### Integration and verification
+- Fix the packaged PowerShell launcher path and argument quoting; support offline plans and optional elevation without a CMD shim.
+- Detach the owned debugger client after failed shutdown or an exited debugger so its event thread cannot keep the capture process alive.
+- Package all reconstruction modules and refresh the bundled unpacking instructions even when dependency downloads are skipped. Make that guide available in the Toolchain workflow selector.
+- Add format-fixture regression tests, pinned Python lint/type validation, and a real Windows x86/x64 compiler/debugger/loader test using owned fixtures. Runtime receipts establish those fixtures only, not arbitrary packed application recovery.
+
 ## 1.4.0 — 2026-10-28
 
 ### Workspace usability

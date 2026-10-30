@@ -28,6 +28,16 @@ jobs:
         run: node scripts/check-version.mjs
       - name: Prepare the pinned Rust toolchain
         run: rustup toolchain install 1.98.0 --profile minimal --component clippy --component rustfmt
+      - name: Validate import reconstruction Python
+        run: |
+          python -m pip install -r scripts/rea-unpack/requirements-dev.txt --disable-pip-version-check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m ruff check scripts/rea-unpack
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m mypy --config-file scripts/rea-unpack/pyproject.toml scripts/rea-unpack
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s scripts/rea-unpack/tests -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Audit public source and JavaScript syntax
         run: |
           node scripts/audit-public.mjs

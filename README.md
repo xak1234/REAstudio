@@ -1,7 +1,7 @@
 <div align="center">
 <img src="resources/rea-logo.svg" alt="REA Studio" width="220">
 
-# REA Studio V1.4.0
+# REA Studio V1.5.0
 
 **A native coding playground with an integrated REA reverse engineering workspace.**
 
@@ -10,7 +10,7 @@
 
 REA Studio combines a project explorer, text editor, Git changes, PowerShell output, model-driven coding tasks, and reverse engineering evidence in a Rust/WebView2 desktop application. The workspace keeps the project, editor, evidence and task settings together, with collapsible side panels to give the current work more room.
 
-**V1.4.0 (package version 1.4.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
+**V1.5.0 (package version 1.5.0).** Previously named QuixiDesk Windows. Existing `.quixi` settings, saved runs, analysis records and the `QuixiDesk\WebView` profile are reused; the `QUIXI_*` environment overrides remain compatible. Close the previous app before opening REA Studio with the same profile.
 
 This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/QuixiAI/QuixiDesk), with a separately implemented playground UI and the upstream MIT attribution preserved. It is an independent community project. It does not include the upstream Classic renderer, extracted application assets, proprietary fonts, example account data, or local machine configuration. See [NOTICE.md](NOTICE.md) for provenance and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled components.
 
@@ -34,6 +34,7 @@ This is a Windows-focused derivative of [QuixiAI/QuixiDesk](https://github.com/Q
 | Models | One **Agent model** runs every task and calls tools; an optional **Decompile helper** (LLM4Decompile) is one of those tools. Connections are managed separately. |
 | Decompile helper | Optional LLM4Decompile endpoint that turns one function's Ghidra/IDA pseudocode or assembly into a source-linked, unverified C suggestion for the agent to review. |
 | Toolchain | Detection, configured paths, workflow guides, GUI launch, optional portable downloads and x64dbg bridge setup. |
+| Packed PE import repair | Paused x64dbg capture, exact export resolution, reviewed IAT/OEP reconstruction, capture-bound offline rebuild plans and explicit structural/runtime limitations. |
 | Providers | API-key providers and local/custom OpenAI-compatible endpoints; model selection and connection testing. |
 
 This release includes an optional authenticated MCP control server. It does **not** implement multi-agent team orchestration, a full interactive terminal/PTY (commands cannot read keyboard input), a full debugger UI, Git branch/push/pull operations, or upstream Classic feature parity. Subscription/OAuth sign-in is not exposed in this interface. Shared upstream engine modules remain in the source, but the public desktop shell serves only the workspace, provider and local MCP settings APIs.
@@ -78,11 +79,11 @@ No global Node, Java, Ghidra, npm, Rust, or administrator installation is needed
 
 ## Install and run
 
-1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.4.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
+1. Open [Releases](https://github.com/xak1234/REAstudio/releases) and download `REA-Studio-1.5.0-x64.zip` and its `.sha256` file. GitHub's automatic **Source code** ZIP is for developers and does not contain the executable or bundled runtimes.
 2. Verify the ZIP in PowerShell:
 
    ```powershell
-   $archive = '.\REA-Studio-1.4.0-x64.zip'
+   $archive = '.\REA-Studio-1.5.0-x64.zip'
    $expected = ((Get-Content "$archive.sha256" -Raw).Trim() -split '\s+')[0]
    $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
    if ($actual -ne $expected) { throw 'Checksum mismatch: download the release again.' }
@@ -199,6 +200,28 @@ The static agent tools cover native functions, call paths, strings, imports/expo
 
 This is a workflow for **functional reconstruction**, not a promise of exact original source or a one-click duplicate. Static tools cannot establish every UI interaction or recover unavailable servers, external data, dynamically generated content or bytes absent from the file. The workflow records those gaps and requests the observations needed to test them. It does not automatically run the original application or perform runtime unpacking. Rebuild only software or features you are authorised to work with, and keep applicable third-party rights and licenses intact.
 
+### Packed PE captures and import repair in V1.5
+
+Use **Toolchain → Bundled REA workflows → Packed PE & import repair** for the
+packaged procedure, or read [the import repair guide](docs/IMPORT-REPAIR.md).
+The `rea-unpack.ps1` launcher is available at the installed application root and
+under `scripts/rea-unpack` in the source tree. Run it from the project terminal
+or through an authorized coding-agent command.
+
+Live capture requires the optional x64dbg Automate bridge and explicit target
+execution authorization. It records the actual loaded image base and exact
+module exports while the target is paused. Reviewed entry-point and IAT ranges
+can then produce new DLL/name or DLL/ordinal import metadata while keeping the
+original IAT slots. A separate hashed review plan supports later rebuilding
+without executing the target again. Unreviewed OEP/range candidates produce an
+analysis-only result, not an import-repair success.
+
+The rebuilt file is structurally checked; its runtime behavior is unverified
+until separately tested. Missing relocations, TLS/Load Config semantics,
+delay imports, runtime-initialized data and unavailable bytes remain explicit
+limitations. This does not recover original source or establish a complete
+application clone.
+
 ### Supporting toolchain
 
 Open **Toolchain** for the analysis core, mobile/.NET, binary, runtime/network and rebuild/verification layers. The core REA/Ghidra runtime and matching REA workflow guides are bundled. The optional installer can obtain pinned portable JADX, the headless JADX MCP engine, Apktool, ILSpy, radare2, x64dbg, ImHex, dnSpyEx, Rizin and RAD Debugger releases with verified SHA-256 checksums.
@@ -277,11 +300,17 @@ cargo test --release -p quixi-engine analysis::investigations::tests --locked
 cargo test --release -p quixi-engine reconstruction::tests --locked
 cargo test --release -p quixi-engine providers::tests --locked
 cargo test --release -p quixi-app --locked
+python -m unittest discover -s scripts/rea-unpack/tests -p "test_*.py" -v
 ```
 
 Clippy warnings inherited from shared upstream modules may remain; a successful check is not a claim that all upstream warnings were removed. The entire legacy test suite is not used as a Windows compatibility claim.
 
 For a real WebView2/Ghidra end-to-end check, follow [docs/TESTING.md](docs/TESTING.md). It uses an isolated profile and a compiled native fixture; it does not mock MCP or pretend to run a model. Live model tests require a separately configured provider and are not run by public CI with anyone's credentials.
+
+The IAT-specific Windows integration check compiles its own x86/x64 fixtures,
+captures them using the real debugger, independently reparses the rebuilt files,
+and verifies their output through actual Windows execution. It is separate from
+the format-fixture unit suite; see the import-repair section in TESTING.md.
 
 ## Additional analysis sources and specialist models
 

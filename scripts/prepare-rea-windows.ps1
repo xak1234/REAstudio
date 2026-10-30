@@ -51,8 +51,14 @@ if (Test-Path $localSkills) {
     $skillsTarget = Join-Path $Destination 'node_modules\rea-agents\skills'
     New-Item $skillsTarget -ItemType Directory -Force | Out-Null
     foreach ($skill in Get-ChildItem -LiteralPath $localSkills -Directory) {
-        Copy-Item -LiteralPath $skill.FullName -Destination $skillsTarget -Recurse -Force
+        $skillTarget = Join-Path $skillsTarget $skill.Name
+        New-Item $skillTarget -ItemType Directory -Force | Out-Null
+        Get-ChildItem -LiteralPath $skill.FullName -Force | Copy-Item -Destination $skillTarget -Recurse -Force
     }
     Write-Host "Deployed local REA skills: $((Get-ChildItem -LiteralPath $localSkills -Directory).Name -join ', ')"
 }
+# Keep the source checkout's toolchain aligned with the packaged launcher.
+$unpackTarget = Join-Path $PSScriptRoot '..\resources\toolchain\rea-unpack'
+New-Item $unpackTarget -ItemType Directory -Force | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'rea-unpack') -File | Where-Object { $_.Extension -in @('.py', '.ps1') } | Copy-Item -Destination $unpackTarget -Force
 Write-Host "REA prepared at $Destination. No system Java or MCP registrations were changed."

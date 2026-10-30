@@ -1,88 +1,79 @@
 ---
 name: unpack-packed-binary
-description: Unpack a runtime-packed/compressed Windows PE (PECompact, UPX, ASPack, MPRESS, FSG and similar) so static analysis can see the real code. Use when a native PE opens with almost no functions, a tiny high-entropy .text, an "imports segment seems destroyed" warning, or a known packer signature, and you need the decompressed image. Produces a rebuilt, analysable PE via a live run-to-OEP dump with x64dbg. Skip for unpacked binaries, managed/.NET assemblies, scripts, and any binary the user does not trust to execute.
-metadata:
-  version: "1"
-  requires: ["x64dbg + x64dbg-automate bridge (Studio toolchain)"]
+description: Capture an explicitly authorized packed Windows x86/x64 EXE and reconstruct reviewed import tables, or rebuild offline from an existing hashed capture. Use for PECompact/UPX-like native targets with packed code, damaged imports, frozen live IAT pointers or a stale stub entry point. Do not use for managed/script targets or promise original source, complete unpacking or runtime equivalence.
 ---
 
-# Unpack a packed Windows PE
+# Capture and repair native PE imports
 
-A runtime packer compresses the real program and ships only a small loader
-stub. Static tools (Ghidra, IDA) then see just the stub — typically 1-2
-functions, a high-entropy `.text`, and a broken import table. The only way to
-recover the real code is to let the stub decompress the image in memory and
-dump it. That means **executing the target**, so this runs only on binaries the
-user trusts, and it asks the user to confirm.
+Use the `rea-unpack.ps1` launcher at the REA Studio installation root. In a
+source checkout it is `scripts/rea-unpack/rea-unpack.ps1`. It locates its Python
+modules and optional x64dbg bridge relative to the installation; pass
+`-BridgePython` and `-X64dbgRoot` when using separately configured locations.
+Read `docs/IMPORT-REPAIR.md` for the full input/report contract.
 
-## When to use
+## Choose the operation
 
-Reach for this when a native PE shows ANY of:
-- `list_procedures` / binary overview returns 1-2 functions on a non-trivial exe
-- `.text` raw entropy ~7.8+ (compressed), or `inspect_binary_layout` flags high per-section entropy
-- the loader prints "the imports segment seems to be destroyed … the file was packed"
-- a packer signature in strings or at entry (e.g. `PECompact`, `UPX!`, `aPLib`, `MPRESS`)
+Check whether execution of this exact target is already authorized. Live
+capture executes the EXE under a new x32dbg/x64dbg session and requires
+`-Trusted`. Ask only when that authorization is missing. Offline
+`-RebuildPlan` uses saved evidence and executes no target. Do not launch an
+unknown binary merely to satisfy an import-table inspection request.
 
-Do NOT use it for already-unpacked binaries, .NET/managed assemblies (use the
-managed tools), interpreted/script apps, or anything the user has not said is
-safe to run.
+For a live capture, require the installed x64dbg Automate bridge. Use the
+bridge's Python interpreter. Administrator-manifest targets need an elevated
+terminal or `-Elevate`; ordinary captures need no elevation. Use a separate new
+output file. The launcher preserves existing source and output files.
 
-## How it works
+## Establish evidence before rebuilding
 
-The `rea-unpack` tool drives x64dbg (via the x64dbg-automate bridge) to:
-1. detect the target's architecture and pick x32dbg (x86) or x64dbg (x64),
-2. launch it under the debugger with the PEB debugger flag hidden,
-3. run with exceptions passed through to the target, so SEH-based decompressors
-   (PECompact and friends) complete their work,
-4. step past the stub until execution reaches the original entry point (OEP) in
-   `.text` at a real function prologue,
-5. dump the now-decompressed image and rebuild a static PE whose sections are
-   realigned (raw offset = virtual address) with the import table resolved
-   in-image, so a disassembler maps it 1:1.
+1. Validate the target identity. Record actual loaded base, process creation
+   identity and same-capture module/export information. Never resolve a frozen
+   pointer against a different process or a later boot without its matching
+   module evidence.
+2. Supply a reviewed `-OepRva` or `-OepVa`, never both. The driver verifies that
+   the requested address is reached. Without an explicit entry point, any
+   prologue-based detection is an unverified candidate. A prologue, entropy
+   change or function count does not prove the true OEP or complete unpacking.
+3. Identify complete IAT extents using debugger/code-reference evidence. Pass
+   `-IatRange` as `RVA:SIZE`, including existing null terminators. For multiple
+   ranges use a PowerShell string array. Default scans and old descriptors
+   propose ranges only; they do not authorize pointer rewriting.
+4. Resolve every nonzero reviewed slot to an exact captured DLL/name or ordinal.
+   Use `-IatDll RUN_RVA:DLL` only to choose a matching captured alias. Preserve
+   ambiguity and unresolved/interior/hooked pointers; never guess a nearest API.
+5. Rebuild only after the caller-selected entry/ranges and complete capture are
+   established. Keep IAT slot RVAs fixed. Unsupported mixed-DLL layouts, missing
+   terminators, insufficient section-header space or incomplete bytes require
+   review, not a fabricated successful file.
 
-## Prerequisites
+For exploration, run the launcher with `-Target`, `-Trusted` and
+`-AnalysisOnly`. It produces capture evidence and an import-review plan. When
+an explicit OEP is known, include it even for the analysis-only capture.
 
-- The x64dbg bridge must be installed (Studio: `Install-X64dbg-Bridge.ps1`).
-  Confirm `E:\tools\REA-Studio\resources\toolchain\x64dbg\release` and the
-  `x64dbg-bridge` venv exist.
-- **The driver must run elevated** so x64dbg can launch admin-manifest targets
-  (`requireAdministrator`); otherwise CreateProcess fails with error 740. The
-  launcher self-elevates and surfaces one UAC prompt — tell the user to expect it.
-- Confirm with the user that the target is safe to execute before running.
+For a reviewed capture, set `reviewed: true` in its `.imports.json` plan after
+checking the OEP, ranges and every selected import. Choose only exact
+identities present in the capture. Preserve the referenced capture/memory
+hashes. Run `-RebuildPlan` with that file and a new `-Output`. Do not delete an
+unresolved slot to manufacture a successful result.
 
-## Run it
+## Report accurately
 
-From the project root (or anywhere), via `studio_command` or a shell:
+Read stdout JSON and the durable `.report.json`. Exit 0 and
+`imports_rebuilt: true` establish structural repair of the selected imports.
+Exit 3 indicates review-required analysis evidence; exit 1 indicates failure.
+Do not call an analysis dump a repaired executable. Keep the `.memory.bin`,
+`.capture.json`, `.imports.json` and `.report.json` files together.
 
-```
-powershell -ExecutionPolicy Bypass -File ^
-  E:\git\rea\bridge\unpack\rea_unpack\rea-unpack.ps1 ^
-  -Target "<path-to-packed.exe>" -Output "<path-to-unpacked.exe>" -Trusted
-```
+State that `runtime_verified` and `portable_verified` remain false until a
+separate authorized behavioral check. Import reconstruction does not restore
+missing relocations, original initialized data, TLS startup state, Load Config
+semantics, delay-import behavior, debug symbols or original code/data
+boundaries. A fixed-base repair does not establish ASLR support. A physical
+host DLL match does not identify an original API-set contract.
 
-It prints one JSON object. Key fields: `ok`, `arch`, `oep`, `oep_found`,
-`packed_entropy` vs `unpacked_entropy` (a large drop, e.g. 6.8 -> 3.9, confirms
-decompression), `output` (the rebuilt PE), `output_sha256`.
-
-Omit `-Output` to write `<input>_unpacked.exe` beside the source. `-Trusted` is
-mandatory and records that the user accepted executing the target.
-
-## After unpacking
-
-Point the analysis at the **rebuilt** file, not the original:
-`studio_rea_select` the `output` path, then `open_binary` (provider `ghidra` or
-`ida`) and `list_procedures`. A successful unpack turns a 1-2 function result
-into the real function set (for the reference target ValiDrive: 2 -> ~318).
-
-If `oep_found` is false but `ok` is true, the dump still captured decompressed
-code (check the entropy drop); the OEP just wasn't latched, so analysis may
-start at the stub entry. Re-run, or set the entry to the OEP manually in the
-disassembler. If the process exits before OEP (`note: "process exited"`), the
-target may refuse to run under a debugger or need runtime state (a device, a
-server); capture what decompressed and note the limitation.
-
-## Safety
-
-This executes the target. Never run it on untrusted or unknown binaries. It
-does not modify the original file; it writes a separate rebuilt PE. It changes
-nothing global and makes no network calls of its own.
+Select the resulting file explicitly in REA Studio and open it with the chosen
+native provider for subsequent analysis. Import the JSON report as evidence
+when needed, preserving its original/dump hashes and limitations. Do not
+equate a successful provider opening or increased function count with execution
+proof or a complete clone. Keep captured application bytes and private runtime
+evidence out of the public source repository.
